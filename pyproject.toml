@@ -1,0 +1,35 @@
+[project]
+name = "yoda"
+version = "0.1.0"
+description = "YoDa - A YOLO Dataset visualizer built with NiceGUI"
+authors = [{ name = "Phil Lies", email = "phil@lies.io" }]
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "loguru>=0.7.3",
+    "nicegui>=3.7.1",
+    "pillow>=12.1.0",
+    "pydantic>=2.12.5",
+    "pydantic-settings>=2.12.0",
+    "pyyaml>=6.0.3",
+    "typer>=0.21.1",
+]
+license = "MIT"
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "C90", "B", "I", "Q", "S", "T"]
+ignore = ["E203"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+
+[dependency-groups]
+dev = ["ruff>=0.15.0"]
+
+[project.scripts]
+yoda = "yoda.main:cli_main"
