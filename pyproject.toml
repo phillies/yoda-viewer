@@ -1,5 +1,5 @@
 [project]
-name = "yoda"
+name = "yoda-viewer"
 version = "0.1.0"
 description = "YoDa - A YOLO Dataset visualizer built with NiceGUI"
 authors = [{ name = "Phil Lies", email = "phil@lies.io" }]

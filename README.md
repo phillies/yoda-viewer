@@ -1,11 +1,11 @@
-# YoDa
+# YoDa Viewer
 YOLO Dataset viewer
 
 ## Installation
 Simply install the package with `[uv] pip install .`.
 
 ## Run
-The dev server (with reload) is started with `yoda-dev`, the prod server without hot reloading with `yoda`.
+Start the server with `yoda`.
 It starts the server on port 8080 by default.
 
 ### Configuration
