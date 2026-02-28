@@ -129,16 +129,18 @@ def _render_segmask(
     """Render a segmentation mask polygon SVG element."""
     points_str = " ".join(f"{p[0]},{p[1]}" for p in label.pixel_points)
     if selected:
+        # Marching ants selection with brighter fill
         return (
             f'<polygon points="{points_str}" '
             f'fill="{color_str}" stroke="white" '
-            f'fill-opacity="0.6" stroke-width="3" '
-            f'stroke-dasharray="8,3" />'
+            f'fill-opacity="0.5" stroke-width="3" '
+            f'stroke-dasharray="8,3" '
+            f'style="animation: marchingAnts 0.6s linear infinite;" />'
         )
     return (
         f'<polygon points="{points_str}" '
         f'fill="{color_str}" stroke="{color_str}" '
-        f'fill-opacity="0.4" stroke-width="2" />'
+        f'fill-opacity="0.3" stroke-width="2" />'
     )
 
 
@@ -180,16 +182,19 @@ def _render_text_label(
         text_parts.append(name)
     text_content = " ".join(text_parts)
 
-    text_w = max(len(text_content) * 8, 20)
-    text_h = 18
+    text_w = max(len(text_content) * 6, 20) + 8
+    text_h = 16
+    pad_x = 4
+    pad_y = 4
     bg = (
         f'<rect x="{tx}" y="{ty - text_h}" '
         f'width="{text_w}" height="{text_h}" '
-        f'fill="rgba(0,0,0,0.6)" rx="2" />'
+        f'fill="rgba(0,0,0,0.7)" rx="3" />'
     )
     txt = (
-        f'<text x="{tx + 3}" y="{ty - 4}" '
-        f'fill="white" font-size="12" font-family="monospace">'
+        f'<text x="{tx + pad_x}" y="{ty - pad_y}" '
+        f'fill="white" font-size="10" '
+        f'font-family="-apple-system, BlinkMacSystemFont, sans-serif">'
         f"{text_content}</text>"
     )
     return bg + txt
