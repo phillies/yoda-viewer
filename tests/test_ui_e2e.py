@@ -233,3 +233,97 @@ class TestYoDaE2E:
 
         # The "Objects" label should be visible in the drawer
         expect(page.locator("text=Objects").first).to_be_visible(timeout=5000)
+
+    def test_class_visibility_checkboxes(
+        self, app_url: str, page: Page
+    ) -> None:
+        """The class legend should have checkboxes to toggle class visibility."""
+        page.goto(app_url)
+        page.wait_for_load_state("networkidle")
+        # Open the right drawer
+        page.locator("button", has=page.locator("i", has_text="list")).first.click()
+        page.wait_for_timeout(500)
+        # "Classes" heading
+        expect(page.locator("text=Classes").first).to_be_visible(timeout=5000)
+        # There should be checkboxes in the drawer (one per class)
+        checkboxes = page.locator(
+            ".q-drawer .q-checkbox"
+        )
+        page.wait_for_timeout(500)
+        assert checkboxes.count() > 0, "Expected class visibility checkboxes"
+
+    def test_object_list_has_visibility_buttons(
+        self, app_url: str, page: Page
+    ) -> None:
+        """Each object in the list should have a visibility toggle button."""
+        page.goto(app_url)
+        page.wait_for_load_state("networkidle")
+
+        # Expand "test" folder and click an image
+        test_node = page.locator(
+            ".q-tree__node-header-content:visible",
+            has_text="test",
+        ).first
+        test_arrow = test_node.locator("..").locator(".q-tree__arrow")
+        if test_arrow.count() > 0:
+            test_arrow.first.click()
+        else:
+            test_node.click()
+        page.wait_for_timeout(2000)
+
+        visible_items = page.locator(".q-tree__node-header-content:visible")
+        for i in range(visible_items.count()):
+            text = visible_items.nth(i).inner_text().strip()
+            if any(text.endswith(ext) for ext in (".jpg", ".png", ".jpeg")):
+                visible_items.nth(i).click()
+                break
+        page.wait_for_timeout(3000)
+
+        # Open drawer
+        page.locator(
+            "button", has=page.locator("i", has_text="list")
+        ).first.click()
+        page.wait_for_timeout(1000)
+
+        # Look for visibility icon buttons
+        vis_icons = page.locator(
+            ".q-drawer i:has-text('visibility')"
+        )
+        assert vis_icons.count() > 0, "Expected visibility toggle icons"
+
+    def test_object_list_has_class_dropdowns(
+        self, app_url: str, page: Page
+    ) -> None:
+        """Each object should have a class dropdown to change its class."""
+        page.goto(app_url)
+        page.wait_for_load_state("networkidle")
+
+        # Expand "test" folder and click an image
+        test_node = page.locator(
+            ".q-tree__node-header-content:visible",
+            has_text="test",
+        ).first
+        test_arrow = test_node.locator("..").locator(".q-tree__arrow")
+        if test_arrow.count() > 0:
+            test_arrow.first.click()
+        else:
+            test_node.click()
+        page.wait_for_timeout(2000)
+
+        visible_items = page.locator(".q-tree__node-header-content:visible")
+        for i in range(visible_items.count()):
+            text = visible_items.nth(i).inner_text().strip()
+            if any(text.endswith(ext) for ext in (".jpg", ".png", ".jpeg")):
+                visible_items.nth(i).click()
+                break
+        page.wait_for_timeout(3000)
+
+        # Open drawer
+        page.locator(
+            "button", has=page.locator("i", has_text="list")
+        ).first.click()
+        page.wait_for_timeout(1000)
+
+        # Look for select/dropdown widgets in the Objects section
+        selects = page.locator(".q-drawer .q-select")
+        assert selects.count() > 0, "Expected class select dropdowns"

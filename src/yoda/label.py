@@ -246,6 +246,30 @@ def render_labels_to_svg(
     return "".join(svg_elements)
 
 
+def write_yolo_labels(
+    file_path: Path,
+    labels: list[LabelObject],
+) -> None:
+    """Write label objects back to a YOLO-format text file.
+
+    Each label is written as one line: ``<class_id> <normalized_coords...>``.
+    The original normalised coordinates stored in
+    :pyattr:`LabelObject.normalized_coords` are used so that no precision
+    is lost through pixel → normalised round-trips.
+
+    Args:
+        file_path: Destination ``.txt`` file path.
+        labels: The label objects to serialise.
+
+    """
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    with file_path.open("w", encoding="utf-8") as fh:
+        for label in labels:
+            coords_str = " ".join(f"{c:.6f}" for c in label.normalized_coords)
+            fh.write(f"{label.class_id} {coords_str}\n")
+    logger.info(f"Saved {len(labels)} labels to {file_path}")
+
+
 # Backward-compatible wrapper (deprecated)
 def parse_yolo(file_path: Path, image_width: int, image_height: int) -> str:
     """Legacy function: parse and render in one step.

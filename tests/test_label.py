@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from yoda.label import LabelObject, parse_yolo_labels, render_labels_to_svg
+from yoda.label import (
+    LabelObject,
+    parse_yolo_labels,
+    render_labels_to_svg,
+    write_yolo_labels,
+)
 
 # ---------------------------------------------------------------------------
 # parse_yolo_labels
@@ -256,3 +261,110 @@ class TestRenderLabelsToSvg:
         )
         assert "0 bumper" in svg
         assert "1 wheel" in svg
+
+
+# ---------------------------------------------------------------------------
+# write_yolo_labels
+# ---------------------------------------------------------------------------
+
+
+class TestWriteYoloLabels:
+    """Tests for the YOLO label writer."""
+
+    def test_roundtrip_polygon(self, tmp_path: Path) -> None:
+        """Writing then reading a polygon label preserves data."""
+        labels = [
+            LabelObject(
+                index=0,
+                class_id=2,
+                label_type="polygon",
+                normalized_coords=[0.1, 0.2, 0.3, 0.2, 0.3, 0.8],
+                pixel_points=[(64, 96), (192, 96), (192, 384)],
+                pixel_bbox=(64, 96, 128, 288),
+            ),
+        ]
+        out = tmp_path / "out.txt"
+        write_yolo_labels(out, labels)
+
+        reparsed = parse_yolo_labels(out, 640, 480)
+        assert len(reparsed) == 1
+        assert reparsed[0].class_id == 2
+        assert reparsed[0].label_type == "polygon"
+        assert reparsed[0].normalized_coords == pytest.approx(
+            [0.1, 0.2, 0.3, 0.2, 0.3, 0.8], abs=1e-5
+        )
+
+    def test_roundtrip_bbox(self, tmp_path: Path) -> None:
+        """Writing then reading a bbox label preserves data."""
+        labels = [
+            LabelObject(
+                index=0,
+                class_id=1,
+                label_type="bbox",
+                normalized_coords=[0.5, 0.5, 0.4, 0.6],
+                pixel_points=[(192, 96), (448, 384)],
+                pixel_bbox=(192, 96, 256, 288),
+            ),
+        ]
+        out = tmp_path / "out.txt"
+        write_yolo_labels(out, labels)
+
+        reparsed = parse_yolo_labels(out, 640, 480)
+        assert len(reparsed) == 1
+        assert reparsed[0].class_id == 1
+        assert reparsed[0].label_type == "bbox"
+
+    def test_class_change_roundtrip(self, tmp_path: Path) -> None:
+        """Changing class_id and writing preserves the new class."""
+        labels = [
+            LabelObject(
+                index=0,
+                class_id=0,
+                label_type="polygon",
+                normalized_coords=[0.1, 0.2, 0.3, 0.2, 0.3, 0.8],
+                pixel_points=[(64, 96), (192, 96), (192, 384)],
+                pixel_bbox=(64, 96, 128, 288),
+            ),
+        ]
+        # Simulate class change (V2 feature)
+        labels[0].class_id = 5
+        out = tmp_path / "out.txt"
+        write_yolo_labels(out, labels)
+
+        reparsed = parse_yolo_labels(out, 640, 480)
+        assert reparsed[0].class_id == 5
+
+    def test_write_creates_parent_dirs(self, tmp_path: Path) -> None:
+        """Write creates parent directories if they don't exist."""
+        out = tmp_path / "sub" / "dir" / "out.txt"
+        write_yolo_labels(out, [])
+        assert out.exists()
+        assert out.read_text() == ""
+
+    def test_write_multiple_labels(self, tmp_path: Path) -> None:
+        """Multiple labels are written as separate lines."""
+        labels = [
+            LabelObject(
+                index=0,
+                class_id=0,
+                label_type="polygon",
+                normalized_coords=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+                pixel_points=[(64, 96), (192, 192), (320, 288)],
+                pixel_bbox=(64, 96, 256, 192),
+            ),
+            LabelObject(
+                index=1,
+                class_id=3,
+                label_type="bbox",
+                normalized_coords=[0.5, 0.5, 0.4, 0.6],
+                pixel_points=[(192, 96), (448, 384)],
+                pixel_bbox=(192, 96, 256, 288),
+            ),
+        ]
+        out = tmp_path / "out.txt"
+        write_yolo_labels(out, labels)
+
+        lines = out.read_text().strip().splitlines()
+        assert len(lines) == 2
+        assert lines[0].startswith("0 ")
+        assert lines[1].startswith("3 ")
