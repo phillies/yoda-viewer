@@ -14,6 +14,8 @@ from yoda.config import YoDaConfig
 from yoda.dataset import load_class_map
 from yoda.label import (
     LabelObject,
+    create_label_from_pixels,
+    delete_label,
     parse_yolo_labels,
     render_labels_to_svg,
     write_yolo_labels,
@@ -44,12 +46,22 @@ class YoDaBrowser:
     # V2: class visibility filter
     hidden_classes: set[int]
 
+    # V3: interaction mode and drawing state
+    interaction_mode: str  # "edit" or "draw"
+    drawing_vertices: list[tuple[float, float]]  # pixel coords being drawn
+    drawing_class_id: int  # class ID for new object
+    selected_object_index: int | None  # index of the currently-selected object
+
     # UI elements (assigned during render)
     interactive_image: InteractiveImage
     image_wrapper: ui.element  # inner wrapper that gets transform
     image_container: ui.element  # outer scrollable container
     object_list_container: ui.column  # type: ignore[assignment]
     message_label: ui.label  # type: ignore[assignment]
+    edit_mode_btn: ui.button  # type: ignore[assignment]
+    draw_mode_btn: ui.button  # type: ignore[assignment]
+    delete_btn: ui.button  # type: ignore[assignment]
+    draw_class_select: ui.select  # type: ignore[assignment]
 
     def __init__(self, config: YoDaConfig) -> None:
         self.config = config
@@ -60,6 +72,11 @@ class YoDaBrowser:
         self.current_labels = []
         self.current_label_path = None
         self.hidden_classes = set()
+        # V3 state
+        self.interaction_mode = "edit"
+        self.drawing_vertices = []
+        self.drawing_class_id = next(iter(self.class_map), 0)
+        self.selected_object_index = None
 
     # ------------------------------------------------------------------
     # Rendering
@@ -150,6 +167,53 @@ class YoDaBrowser:
 
             ui.separator().props("vertical").classes("mx-2")
 
+            # V3: Interaction mode buttons
+            self.edit_mode_btn = (
+                ui.button(
+                    icon="pan_tool",
+                    on_click=self._set_edit_mode,
+                )
+                .props("flat color=yellow dense")
+                .tooltip("Edit / Pan mode")
+            )
+            self.draw_mode_btn = (
+                ui.button(
+                    icon="add",
+                    on_click=self._set_draw_mode,
+                )
+                .props("flat color=white dense")
+                .tooltip("Add object")
+            )
+            self.delete_btn = (
+                ui.button(
+                    icon="delete",
+                    on_click=self._on_delete_selected,
+                )
+                .props("flat color=red dense")
+                .tooltip("Delete selected object")
+            )
+            self.delete_btn.set_enabled(False)
+
+            # V3: Class selector for new objects
+            class_options: dict[int, str] = {}
+            for cid, cname in self.class_map.items():
+                class_options[cid] = cname
+            if not class_options:
+                class_options[0] = "class 0"
+            self.draw_class_select = (
+                ui.select(
+                    options=class_options,
+                    value=self.drawing_class_id,
+                    on_change=lambda e: setattr(self, "drawing_class_id", e.value),
+                )
+                .props("dense options-dense borderless")
+                .classes("text-xs text-white")
+                .style("min-width: 100px;")
+                .tooltip("Class for new objects")
+            )
+
+            ui.separator().props("vertical").classes("mx-2")
+
             # Zoom controls
             ui.button(
                 icon="fit_screen",
@@ -204,12 +268,20 @@ class YoDaBrowser:
             )
             with self.image_wrapper:
                 self.interactive_image = (
-                    ui.interactive_image("", cross=False)
+                    ui.interactive_image(
+                        "",
+                        cross=False,
+                        on_mouse=self._on_image_click,
+                        events=["click"],
+                    )
                     .classes("w-auto h-auto")
                     .style("max-width: none; max-height: none; display: block;")
                 )
             self.interactive_image.visible = False
             self.image_wrapper.visible = False
+
+        # V3: Keyboard handler for draw mode (Enter / Escape)
+        ui.keyboard(on_key=self._on_key_event)
 
         # Inject client-side JS for wheel-zoom and drag-pan
         self._inject_zoom_pan_js()
@@ -270,9 +342,7 @@ class YoDaBrowser:
                         )
                         ui.label(name).classes("text-xs text-white")
 
-    def _on_class_visibility_change(
-        self, class_id: int, visible: bool
-    ) -> None:
+    def _on_class_visibility_change(self, class_id: int, visible: bool) -> None:
         """Toggle visibility for all objects of a given class."""
         if visible:
             self.hidden_classes.discard(class_id)
@@ -287,9 +357,7 @@ class YoDaBrowser:
         self._refresh_overlay()
         self._rebuild_object_list()
 
-    def _on_object_visibility_toggle(
-        self, label_index: int, visible: bool
-    ) -> None:
+    def _on_object_visibility_toggle(self, label_index: int, visible: bool) -> None:
         """Toggle visibility of a single object."""
         for label in self.current_labels:
             if label.index == label_index:
@@ -298,9 +366,7 @@ class YoDaBrowser:
         self._refresh_overlay()
         self._rebuild_object_list()
 
-    def _on_class_change(
-        self, label_index: int, new_class_id: int
-    ) -> None:
+    def _on_class_change(self, label_index: int, new_class_id: int) -> None:
         """Change the class of a single object and save to disk."""
         for label in self.current_labels:
             if label.index == label_index:
@@ -319,6 +385,245 @@ class YoDaBrowser:
         write_yolo_labels(self.current_label_path, self.current_labels)
 
     # ------------------------------------------------------------------
+    # V3: Interaction modes — edit / draw + delete
+    # ------------------------------------------------------------------
+
+    def _set_edit_mode(self) -> None:
+        """Switch to edit / pan mode and discard any in-progress drawing."""
+        self.interaction_mode = "edit"
+        self.drawing_vertices = []
+        self._update_mode_buttons()
+        self._update_cursor_and_handlers()
+        self._refresh_overlay()
+
+    def _set_draw_mode(self) -> None:
+        """Switch to draw mode for adding new objects."""
+        if self.image_object is None:
+            ui.notify("Load an image first", type="warning")
+            return
+        self.interaction_mode = "draw"
+        self.drawing_vertices = []
+        self._update_mode_buttons()
+        self._update_cursor_and_handlers()
+        self._refresh_overlay()
+
+    def _update_mode_buttons(self) -> None:
+        """Highlight the active mode button."""
+        if self.interaction_mode == "edit":
+            self.edit_mode_btn.props("color=yellow")
+            self.draw_mode_btn.props("color=white")
+        else:
+            self.edit_mode_btn.props("color=white")
+            self.draw_mode_btn.props("color=yellow")
+
+    def _update_cursor_and_handlers(self) -> None:
+        """Update the cursor style and JS handlers based on the mode."""
+        cid = self.image_container.id
+        if self.interaction_mode == "draw":
+            # Crosshair cursor and disable pan
+            ui.run_javascript(
+                f"(function(){{ "
+                f"  var c = document.getElementById('c{cid}');"
+                f"  if (c) {{ c.style.cursor = 'crosshair'; c._yzDrawMode = true; }}"
+                f"}})();"
+            )
+        else:
+            # Grab cursor and enable pan
+            ui.run_javascript(
+                f"(function(){{ "
+                f"  var c = document.getElementById('c{cid}');"
+                f"  if (c) {{ c.style.cursor = 'grab'; c._yzDrawMode = false; }}"
+                f"}})();"
+            )
+
+    @staticmethod
+    def _point_in_polygon(
+        x: float, y: float, points: list[tuple[float, float]]
+    ) -> bool:
+        """Ray-casting point-in-polygon test."""
+        n = len(points)
+        inside = False
+        px, py = x, y
+        j = n - 1
+        for i in range(n):
+            xi, yi = points[i]
+            xj, yj = points[j]
+            if ((yi > py) != (yj > py)) and (
+                px < (xj - xi) * (py - yi) / (yj - yi) + xi
+            ):
+                inside = not inside
+            j = i
+        return inside
+
+    def _on_image_click(self, e: events.MouseEventArguments) -> None:
+        """Handle click on the interactive image.
+
+        In *edit* mode: select the topmost polygon under the cursor.
+        In *draw* mode: add a vertex, or close the polygon.
+        """
+        if self.image_object is None:
+            return
+
+        x, y = e.image_x, e.image_y
+
+        if self.interaction_mode == "edit":
+            # Find the topmost visible polygon that contains the click point
+            hit_index: int | None = None
+            for label_obj in reversed(self.current_labels):
+                if not label_obj.visible:
+                    continue
+                if label_obj.label_type == "polygon" and self._point_in_polygon(
+                    x, y, label_obj.pixel_points
+                ):
+                    hit_index = label_obj.index
+                    break
+                if label_obj.label_type == "bbox":
+                    bx, by, bw, bh = label_obj.pixel_bbox
+                    if bx <= x <= bx + bw and by <= y <= by + bh:
+                        hit_index = label_obj.index
+                        break
+            # Toggle off if clicking the same object again
+            if hit_index == self.selected_object_index:
+                self.selected_object_index = None
+            else:
+                self.selected_object_index = hit_index
+            self._refresh_overlay()
+            self._rebuild_object_list()
+            self._update_delete_button()
+            return
+
+        # Draw mode: add vertices
+        if self.interaction_mode != "draw":
+            return
+        logger.info(f"Draw vertex at ({x:.1f}, {y:.1f})")
+
+        # Check if clicking near the first vertex to close the polygon
+        if len(self.drawing_vertices) >= 3:
+            fx, fy = self.drawing_vertices[0]
+            # Close threshold: 10px in image space
+            dist = ((x - fx) ** 2 + (y - fy) ** 2) ** 0.5
+            if dist < 10:
+                self._finish_drawing()
+                return
+
+        self.drawing_vertices.append((x, y))
+        self._refresh_overlay()
+
+    def _on_key_event(self, e: events.KeyEventArguments) -> None:
+        """Handle keyboard events for draw mode (Enter to finish, Escape to cancel)."""
+        if not e.action.keydown:
+            return
+        if e.key == "Escape":
+            if self.interaction_mode == "draw" and self.drawing_vertices:
+                self.drawing_vertices = []
+                self._refresh_overlay()
+                ui.notify("Drawing discarded", type="info")
+            elif self.interaction_mode == "draw":
+                self._set_edit_mode()
+        elif e.key == "Enter":
+            if self.interaction_mode == "draw" and len(self.drawing_vertices) >= 3:
+                self._finish_drawing()
+            elif self.interaction_mode == "draw":
+                ui.notify("Need at least 3 vertices", type="warning")
+
+    def _finish_drawing(self) -> None:
+        """Complete the polygon drawing and store the new object."""
+        if self.image_object is None or len(self.drawing_vertices) < 3:
+            return
+
+        new_index = len(self.current_labels)
+        new_label = create_label_from_pixels(
+            self.drawing_vertices,
+            self.image_object.width,
+            self.image_object.height,
+            self.drawing_class_id,
+            new_index,
+        )
+        # Apply visibility from hidden_classes
+        new_label.visible = new_label.class_id not in self.hidden_classes
+
+        self.current_labels.append(new_label)
+        self.drawing_vertices = []
+        self._save_labels()
+        self._refresh_overlay()
+        self._rebuild_object_list()
+        ui.notify(f"Object #{new_index + 1} added", type="positive")
+
+    def _on_delete_object(self, label_index: int) -> None:
+        """Delete an object by index, save and refresh."""
+        logger.info(f"Deleting object at index {label_index}")
+        try:
+            self.current_labels = delete_label(self.current_labels, label_index)
+            # Clear selection if the deleted object was selected
+            if self.selected_object_index == label_index:
+                self.selected_object_index = None
+            # Re-validate selected index in case re-sequencing made it stale
+            elif self.selected_object_index is not None:
+                valid_indices = {lbl.index for lbl in self.current_labels}
+                if self.selected_object_index not in valid_indices:
+                    self.selected_object_index = None
+            self._save_labels()
+            self._refresh_overlay()
+            # Notify BEFORE rebuild: _rebuild_object_list clears the container
+            # which deletes the triggering button and invalidates the slot context.
+            ui.notify("Object deleted", type="info")
+            self._rebuild_object_list()
+            logger.info(
+                f"Delete complete. {len(self.current_labels)} objects remaining"
+            )
+        except Exception:
+            logger.exception("Error in _on_delete_object")
+        finally:
+            self._update_delete_button()
+
+    def _on_delete_selected(self) -> None:
+        """Delete the currently selected object (toolbar button handler)."""
+        if self.selected_object_index is not None:
+            self._on_delete_object(self.selected_object_index)
+
+    def _update_delete_button(self) -> None:
+        """Enable or disable the toolbar delete button based on selection."""
+        self.delete_btn.set_enabled(self.selected_object_index is not None)
+
+    def _render_drawing_preview_svg(self) -> str:
+        """Render an SVG preview of the polygon being drawn."""
+        if not self.drawing_vertices:
+            return ""
+
+        color = self.config.get_color_string(self.drawing_class_id)
+        parts: list[str] = []
+
+        # Draw polyline connecting vertices
+        if len(self.drawing_vertices) >= 2:
+            points_str = " ".join(f"{p[0]},{p[1]}" for p in self.drawing_vertices)
+            parts.append(
+                f'<polyline points="{points_str}" '
+                f'fill="none" stroke="{color}" '
+                f'stroke-width="2" stroke-dasharray="5,3" />'
+            )
+
+        # Draw vertex circles
+        for i, (vx, vy) in enumerate(self.drawing_vertices):
+            r = 5 if i == 0 else 3
+            fill = "white" if i == 0 else color
+            parts.append(
+                f'<circle cx="{vx}" cy="{vy}" r="{r}" '
+                f'fill="{fill}" stroke="{color}" stroke-width="2" />'
+            )
+
+        # If we have >= 3 vertices, show a faint closing line to first vertex
+        if len(self.drawing_vertices) >= 3:
+            lx, ly = self.drawing_vertices[-1]
+            fx, fy = self.drawing_vertices[0]
+            parts.append(
+                f'<line x1="{lx}" y1="{ly}" x2="{fx}" y2="{fy}" '
+                f'stroke="{color}" stroke-width="1" '
+                f'stroke-dasharray="3,3" opacity="0.5" />'
+            )
+
+        return "".join(parts)
+
+    # ------------------------------------------------------------------
     # Zoom / Pan (client-side JS)
     # ------------------------------------------------------------------
 
@@ -334,6 +639,7 @@ class YoDaBrowser:
             "  var s = { scale:1, panX:0, panY:0,"
             "            dragging:false, sx:0, sy:0, spx:0, spy:0 };"
             "  c._yz = s;"
+            "  c._yzDrawMode = false;"
             "  function ap() {"
             "    w.style.transform = "
             "      'translate(' + s.panX + 'px,' + s.panY + 'px) "
@@ -353,7 +659,7 @@ class YoDaBrowser:
             "    ap();"
             "  }, {passive:false});"
             "  c.addEventListener('mousedown', function(e) {"
-            "    if (e.button !== 0) return;"
+            "    if (e.button !== 0 || c._yzDrawMode) return;"
             "    s.dragging = true;"
             "    s.sx = e.clientX; s.sy = e.clientY;"
             "    s.spx = s.panX; s.spy = s.panY;"
@@ -369,7 +675,7 @@ class YoDaBrowser:
             "  window.addEventListener('mouseup', function() {"
             "    if (s.dragging) {"
             "      s.dragging = false;"
-            "      c.style.cursor = 'grab';"
+            "      if (!c._yzDrawMode) c.style.cursor = 'grab';"
             "    }"
             "  });"
             "  ap();"
@@ -462,6 +768,10 @@ class YoDaBrowser:
         self.interactive_image.visible = True
         self.image_wrapper.visible = True
 
+        # Clear selection when loading a new image
+        self.selected_object_index = None
+        self._update_delete_button()
+
         # Open image
         self.image_object = Image.open(image_path)
         self.interactive_image.source = self.image_object
@@ -504,17 +814,21 @@ class YoDaBrowser:
             show_class_id=self.show_class_id,
             show_class_name=self.show_class_name,
             class_map=self.class_map,
+            selected_index=self.selected_object_index,
         )
+        # V3: Append drawing preview when in draw mode
+        svg += self._render_drawing_preview_svg()
         self.interactive_image.content = svg
 
     def _rebuild_object_list(self) -> None:
-        """Populate the right-drawer object list with V2 controls.
+        """Populate the right-drawer object list with V2/V3 controls.
 
         Each object row has:
         - An eye icon to toggle visibility (hide/show)
         - A color dot
         - A class dropdown to change the object's class
         - The object type badge
+        - A delete button (V3)
         """
         self.object_list_container.clear()
 
@@ -543,13 +857,17 @@ class YoDaBrowser:
                 color_str = self.config.get_color_string(label_obj.class_id)
                 obj_type = "bbox" if label_obj.label_type == "bbox" else "poly"
                 idx = label_obj.index
+                is_selected = idx == self.selected_object_index
+                row_bg = (
+                    "background: rgba(255,255,255,0.12); border-radius: 4px;"
+                    if is_selected
+                    else ""
+                )
 
-                with ui.row().classes("items-center gap-1 w-full"):
+                with ui.row().classes("items-center gap-1 w-full").style(row_bg):
                     # Eye icon toggle for visibility
                     ui.button(
-                        icon=(
-                            "visibility" if label_obj.visible else "visibility_off"
-                        ),
+                        icon=("visibility" if label_obj.visible else "visibility_off"),
                         on_click=lambda _e, i=idx, v=label_obj.visible: (
                             self._on_object_visibility_toggle(i, not v)
                         ),
@@ -568,16 +886,18 @@ class YoDaBrowser:
                     ui.select(
                         options=class_options,
                         value=label_obj.class_id,
-                        on_change=lambda e, i=idx: self._on_class_change(
-                            i, e.value
-                        ),
-                    ).props(
-                        "dense options-dense borderless"
-                    ).classes("text-xs text-white").style(
-                        "min-width: 80px; flex: 1;"
-                    )
+                        on_change=lambda e, i=idx: self._on_class_change(i, e.value),
+                    ).props("dense options-dense borderless").classes(
+                        "text-xs text-white"
+                    ).style("min-width: 80px; flex: 1;")
 
                     # Type badge
-                    ui.label(f"[{obj_type}]").classes(
-                        "text-gray-400 text-xs ml-auto"
+                    ui.label(f"[{obj_type}]").classes("text-gray-400 text-xs")
+
+                    # V3: Delete button
+                    ui.button(
+                        icon="delete",
+                        on_click=lambda _e, i=idx: self._on_delete_object(i),
+                    ).props("flat dense size=xs color=red padding=none").tooltip(
+                        "Delete object"
                     )

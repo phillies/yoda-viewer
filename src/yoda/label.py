@@ -123,9 +123,18 @@ def parse_yolo_labels(
     return labels
 
 
-def _render_segmask(label: LabelObject, color_str: str) -> str:
+def _render_segmask(
+    label: LabelObject, color_str: str, *, selected: bool = False
+) -> str:
     """Render a segmentation mask polygon SVG element."""
     points_str = " ".join(f"{p[0]},{p[1]}" for p in label.pixel_points)
+    if selected:
+        return (
+            f'<polygon points="{points_str}" '
+            f'fill="{color_str}" stroke="white" '
+            f'fill-opacity="0.6" stroke-width="3" '
+            f'stroke-dasharray="8,3" />'
+        )
     return (
         f'<polygon points="{points_str}" '
         f'fill="{color_str}" stroke="{color_str}" '
@@ -195,6 +204,7 @@ def render_labels_to_svg(
     show_class_id: bool = False,
     show_class_name: bool = False,
     class_map: dict[int, str] | None = None,
+    selected_index: int | None = None,
 ) -> str:
     """Render a list of LabelObject instances to an SVG string.
 
@@ -207,6 +217,7 @@ def render_labels_to_svg(
         show_class_id: Whether to render class ID text labels.
         show_class_name: Whether to render class name text labels.
         class_map: Mapping of class_id -> class name string.
+        selected_index: Index of the currently-selected label (highlighted).
 
     Returns:
         An SVG string containing all rendered elements.
@@ -225,9 +236,10 @@ def render_labels_to_svg(
 
         color = color_map.get(label.class_id % len(color_map), (255, 255, 255))
         color_str = f"rgb({color[0]},{color[1]},{color[2]})"
+        is_selected = label.index == selected_index
 
         if show_segmask and label.label_type == "polygon":
-            svg_elements.append(_render_segmask(label, color_str))
+            svg_elements.append(_render_segmask(label, color_str, selected=is_selected))
 
         if show_bbox:
             svg_elements.append(_render_bbox(label, color_str))
@@ -268,6 +280,86 @@ def write_yolo_labels(
             coords_str = " ".join(f"{c:.6f}" for c in label.normalized_coords)
             fh.write(f"{label.class_id} {coords_str}\n")
     logger.info(f"Saved {len(labels)} labels to {file_path}")
+
+
+def create_label_from_pixels(
+    pixel_points: list[tuple[float, float]],
+    image_width: int,
+    image_height: int,
+    class_id: int,
+    index: int,
+) -> LabelObject:
+    """Create a new polygon LabelObject from pixel coordinates.
+
+    Converts pixel coordinates to normalised YOLO format and computes the
+    bounding box. Requires at least 3 points for a valid polygon.
+
+    Args:
+        pixel_points: List of (x, y) pixel coordinate tuples forming
+            the polygon.
+        image_width: Width of the image in pixels.
+        image_height: Height of the image in pixels.
+        class_id: YOLO class ID for the new object.
+        index: 0-based index for the new object.
+
+    Returns:
+        A new LabelObject with ``label_type="polygon"``.
+
+    Raises:
+        ValueError: If fewer than 3 points are provided or image
+            dimensions are non-positive.
+
+    """
+    if len(pixel_points) < 3:
+        raise ValueError(
+            f"At least 3 points required for a polygon, got {len(pixel_points)}"
+        )
+    if image_width <= 0 or image_height <= 0:
+        raise ValueError(
+            f"Image dimensions must be positive, got {image_width}x{image_height}"
+        )
+
+    # Build normalised coordinates
+    normalized_coords: list[float] = []
+    for px, py in pixel_points:
+        normalized_coords.append(px / image_width)
+        normalized_coords.append(py / image_height)
+
+    # Compute bounding box from pixel points
+    xs = [p[0] for p in pixel_points]
+    ys = [p[1] for p in pixel_points]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+
+    return LabelObject(
+        index=index,
+        class_id=class_id,
+        label_type="polygon",
+        normalized_coords=normalized_coords,
+        pixel_points=list(pixel_points),
+        pixel_bbox=(min_x, min_y, max_x - min_x, max_y - min_y),
+    )
+
+
+def delete_label(
+    labels: list[LabelObject],
+    label_index: int,
+) -> list[LabelObject]:
+    """Remove a label by its index and re-number remaining labels.
+
+    Args:
+        labels: The current list of label objects.
+        label_index: The ``index`` attribute of the label to remove.
+
+    Returns:
+        A new list with the label removed and indices renumbered
+        sequentially starting from 0.
+
+    """
+    new_labels = [lbl for lbl in labels if lbl.index != label_index]
+    for i, lbl in enumerate(new_labels):
+        lbl.index = i
+    return new_labels
 
 
 # Backward-compatible wrapper (deprecated)

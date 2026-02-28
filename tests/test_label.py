@@ -8,6 +8,8 @@ import pytest
 
 from yoda.label import (
     LabelObject,
+    create_label_from_pixels,
+    delete_label,
     parse_yolo_labels,
     render_labels_to_svg,
     write_yolo_labels,
@@ -262,6 +264,36 @@ class TestRenderLabelsToSvg:
         assert "0 bumper" in svg
         assert "1 wheel" in svg
 
+    def test_selected_index_highlights_polygon(
+        self,
+        sample_labels: list[LabelObject],
+        color_map: dict[int, tuple[int, int, int]],
+    ) -> None:
+        """Selected polygon uses distinct SVG attributes (white stroke, dashed)."""
+        svg = render_labels_to_svg(
+            sample_labels,
+            color_map,
+            show_segmask=True,
+            selected_index=0,
+        )
+        assert 'stroke="white"' in svg
+        assert "stroke-dasharray" in svg
+
+    def test_selected_index_none_no_highlight(
+        self,
+        sample_labels: list[LabelObject],
+        color_map: dict[int, tuple[int, int, int]],
+    ) -> None:
+        """No selected index means no white dash stroke."""
+        svg = render_labels_to_svg(
+            sample_labels,
+            color_map,
+            show_segmask=True,
+            selected_index=None,
+        )
+        assert 'stroke="white"' not in svg
+        assert "stroke-dasharray" not in svg
+
 
 # ---------------------------------------------------------------------------
 # write_yolo_labels
@@ -368,3 +400,158 @@ class TestWriteYoloLabels:
         assert len(lines) == 2
         assert lines[0].startswith("0 ")
         assert lines[1].startswith("3 ")
+
+
+# ---------------------------------------------------------------------------
+# create_label_from_pixels (V3)
+# ---------------------------------------------------------------------------
+
+
+class TestCreateLabelFromPixels:
+    """Tests for creating a LabelObject from pixel coordinates."""
+
+    def test_basic_triangle(self) -> None:
+        """A triangle of pixel coords produces a valid polygon label."""
+        points = [(100.0, 100.0), (200.0, 100.0), (150.0, 200.0)]
+        label = create_label_from_pixels(points, 640, 480, class_id=2, index=0)
+
+        assert label.label_type == "polygon"
+        assert label.class_id == 2
+        assert label.index == 0
+        assert len(label.pixel_points) == 3
+        assert label.pixel_points == points
+
+    def test_normalized_coords_correct(self) -> None:
+        """Normalised coordinates are pixel coords / image dimensions."""
+        points = [(64.0, 96.0), (192.0, 96.0), (192.0, 384.0)]
+        label = create_label_from_pixels(points, 640, 480, class_id=0, index=0)
+
+        assert label.normalized_coords == pytest.approx([0.1, 0.2, 0.3, 0.2, 0.3, 0.8])
+
+    def test_bounding_box_computed(self) -> None:
+        """Pixel bounding box should be the min/max extent of points."""
+        points = [(50.0, 100.0), (200.0, 50.0), (150.0, 300.0)]
+        label = create_label_from_pixels(points, 640, 480, class_id=0, index=0)
+
+        bx, by, bw, bh = label.pixel_bbox
+        assert bx == pytest.approx(50.0)
+        assert by == pytest.approx(50.0)
+        assert bw == pytest.approx(150.0)
+        assert bh == pytest.approx(250.0)
+
+    def test_too_few_points_raises(self) -> None:
+        """Fewer than 3 points should raise ValueError."""
+        with pytest.raises(ValueError, match="At least 3 points"):
+            create_label_from_pixels(
+                [(10.0, 10.0), (20.0, 20.0)], 640, 480, class_id=0, index=0
+            )
+
+    def test_zero_dimensions_raises(self) -> None:
+        """Zero or negative image dimensions should raise ValueError."""
+        points = [(10.0, 10.0), (20.0, 20.0), (30.0, 30.0)]
+        with pytest.raises(ValueError, match="positive"):
+            create_label_from_pixels(points, 0, 480, class_id=0, index=0)
+        with pytest.raises(ValueError, match="positive"):
+            create_label_from_pixels(points, 640, -1, class_id=0, index=0)
+
+    def test_roundtrip_through_write_and_read(self, tmp_path: Path) -> None:
+        """A label created from pixels can be written and re-read."""
+        points = [(64.0, 96.0), (192.0, 96.0), (192.0, 384.0)]
+        label = create_label_from_pixels(points, 640, 480, class_id=3, index=0)
+
+        out = tmp_path / "new.txt"
+        write_yolo_labels(out, [label])
+
+        reparsed = parse_yolo_labels(out, 640, 480)
+        assert len(reparsed) == 1
+        assert reparsed[0].class_id == 3
+        assert reparsed[0].label_type == "polygon"
+        assert len(reparsed[0].pixel_points) == 3
+        # Check pixel points match within tolerance
+        for orig, parsed in zip(points, reparsed[0].pixel_points):
+            assert orig[0] == pytest.approx(parsed[0], abs=0.1)
+            assert orig[1] == pytest.approx(parsed[1], abs=0.1)
+
+    def test_visible_defaults_to_true(self) -> None:
+        """New labels should be visible by default."""
+        points = [(10.0, 10.0), (20.0, 20.0), (30.0, 30.0)]
+        label = create_label_from_pixels(points, 640, 480, class_id=0, index=0)
+        assert label.visible is True
+
+
+# ---------------------------------------------------------------------------
+# delete_label (V3)
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteLabel:
+    """Tests for deleting labels and re-indexing."""
+
+    def _make_labels(self, n: int) -> list[LabelObject]:
+        """Create *n* dummy polygon labels."""
+        return [
+            LabelObject(
+                index=i,
+                class_id=i % 3,
+                label_type="polygon",
+                normalized_coords=[0.1, 0.2, 0.3, 0.2, 0.3, 0.8],
+                pixel_points=[(64, 96), (192, 96), (192, 384)],
+                pixel_bbox=(64, 96, 128, 288),
+            )
+            for i in range(n)
+        ]
+
+    def test_delete_middle(self) -> None:
+        """Deleting the middle label removes it and renumbers."""
+        labels = self._make_labels(3)
+        result = delete_label(labels, 1)
+        assert len(result) == 2
+        assert [l.index for l in result] == [0, 1]
+        # Original class_ids: 0, 1, 2 → after removing index 1 → 0, 2
+        assert result[0].class_id == 0
+        assert result[1].class_id == 2
+
+    def test_delete_first(self) -> None:
+        """Deleting the first label re-indexes from 0."""
+        labels = self._make_labels(3)
+        result = delete_label(labels, 0)
+        assert len(result) == 2
+        assert [l.index for l in result] == [0, 1]
+
+    def test_delete_last(self) -> None:
+        """Deleting the last label works correctly."""
+        labels = self._make_labels(3)
+        result = delete_label(labels, 2)
+        assert len(result) == 2
+        assert [l.index for l in result] == [0, 1]
+
+    def test_delete_nonexistent_index(self) -> None:
+        """Deleting an index that doesn't exist returns all labels renumbered."""
+        labels = self._make_labels(3)
+        result = delete_label(labels, 99)
+        assert len(result) == 3
+        assert [l.index for l in result] == [0, 1, 2]
+
+    def test_delete_from_single(self) -> None:
+        """Deleting the only label produces an empty list."""
+        labels = self._make_labels(1)
+        result = delete_label(labels, 0)
+        assert result == []
+
+    def test_delete_from_empty(self) -> None:
+        """Deleting from an empty list returns an empty list."""
+        result = delete_label([], 0)
+        assert result == []
+
+    def test_delete_roundtrip(self, tmp_path: Path) -> None:
+        """Delete + write + re-read preserves remaining labels."""
+        labels = self._make_labels(3)
+        result = delete_label(labels, 1)
+
+        out = tmp_path / "deleted.txt"
+        write_yolo_labels(out, result)
+
+        reparsed = parse_yolo_labels(out, 640, 480)
+        assert len(reparsed) == 2
+        assert reparsed[0].class_id == 0
+        assert reparsed[1].class_id == 2
