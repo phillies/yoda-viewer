@@ -1,4 +1,8 @@
-"""YoDa Browser — NiceGUI-based UI for viewing YOLO segmentation labels."""
+"""YoDa Browser — NiceGUI-based UI for viewing YOLO segmentation labels.
+
+V4: UX improvements — consistent dark theme, compact toolbar, status bar,
+improved inspector panel, keyboard shortcuts.
+"""
 
 from __future__ import annotations
 
@@ -21,6 +25,198 @@ from yoda.label import (
     write_yolo_labels,
 )
 
+# ---------------------------------------------------------------------------
+# Theme CSS  (V4)
+# ---------------------------------------------------------------------------
+
+_THEME_CSS = """\
+:root {
+    --bg-base: #1e1e2e;
+    --bg-surface: #282840;
+    --bg-surface-hover: #32325a;
+    --bg-elevated: #363660;
+    --text-primary: #e0e0f0;
+    --text-secondary: #a0a0c0;
+    --text-muted: #6a6a90;
+    --accent: #7c8aff;
+    --accent-hover: #9aa4ff;
+    --danger: #ff6b6b;
+    --success: #69db7c;
+    --border: #3a3a60;
+}
+html, body {
+    margin: 0; padding: 0; overflow: hidden;
+    height: 100%;
+    background: var(--bg-base);
+    color: var(--text-primary);
+}
+.nicegui-content { padding: 0 !important; }
+
+/* Smooth transitions */
+button, .q-toggle, .q-checkbox, .q-select, .q-btn {
+    transition: background-color 0.15s ease, color 0.15s ease,
+                border-color 0.15s ease, opacity 0.15s ease !important;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-base); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* File tree */
+.q-tree__node-header-content {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.q-tree__node--selected > .q-tree__node-header {
+    background: var(--bg-elevated) !important;
+    border-left: 3px solid var(--accent);
+}
+.q-tree__node-header:hover {
+    background: var(--bg-surface-hover) !important;
+}
+.q-tree,
+.q-tree__node-header-content,
+.q-tree__node-header-content div { color: var(--text-primary) !important; }
+.q-tree .q-icon { color: var(--text-secondary) !important; }
+
+/* Tooltip */
+.q-tooltip {
+    font-size: 12px !important;
+    background: var(--bg-elevated) !important;
+    border: 1px solid var(--border) !important;
+    color: var(--text-primary) !important;
+}
+
+/* Drawer */
+.q-drawer {
+    background: var(--bg-surface) !important;
+    border-left: 1px solid var(--border) !important;
+}
+
+/* Splitter handle */
+.q-splitter__separator {
+    background: var(--border) !important;
+}
+
+/* Button group container */
+.yoda-btn-group {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    gap: 0;
+}
+.yoda-btn-group .q-btn {
+    border-radius: 0 !important;
+    min-height: 28px !important;
+    min-width: 28px !important;
+    padding: 2px 7px !important;
+}
+
+/* Toggle button states */
+.yoda-toggle-active {
+    background: var(--accent) !important;
+    color: white !important;
+}
+.yoda-toggle-active .q-icon { color: white !important; }
+.yoda-toggle-inactive {
+    background: transparent !important;
+    color: var(--text-muted) !important;
+}
+.yoda-toggle-inactive:hover {
+    background: var(--bg-surface-hover) !important;
+    color: var(--text-primary) !important;
+}
+
+/* Status bar */
+.yoda-status-bar {
+    height: 24px;
+    background: var(--bg-surface);
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    font-size: 12px;
+    font-family: 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
+    color: var(--text-secondary);
+    gap: 16px;
+    flex-shrink: 0;
+}
+
+/* Object row */
+.yoda-object-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    border-radius: 4px;
+    background: transparent;
+    transition: background 0.15s ease;
+    width: 100%;
+    cursor: default;
+}
+.yoda-object-row:hover {
+    background: var(--bg-surface-hover);
+}
+.yoda-object-row:hover .yoda-delete-btn {
+    opacity: 1 !important;
+}
+.yoda-object-selected {
+    background: var(--bg-elevated) !important;
+    border-left: 3px solid var(--accent);
+}
+
+/* Section headers */
+.yoda-section-header {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    padding: 8px 0 4px 0;
+}
+
+/* Checkerboard canvas background */
+.yoda-canvas-bg {
+    background-color: var(--bg-base);
+    background-image:
+        linear-gradient(45deg, #252540 25%, transparent 25%),
+        linear-gradient(-45deg, #252540 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #252540 75%),
+        linear-gradient(-45deg, transparent 75%, #252540 75%);
+    background-size: 20px 20px;
+    background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+}
+
+/* Marching ants animation for selected polygons */
+@keyframes marchingAnts {
+    to { stroke-dashoffset: -22; }
+}
+
+/* Select styling */
+.q-field__control { color: var(--text-primary) !important; }
+.q-field__native { color: var(--text-primary) !important; }
+
+/* Dropdown / popup menu */
+.q-menu {
+    background: var(--bg-surface) !important;
+    border: 1px solid var(--border) !important;
+}
+.q-menu .q-item {
+    color: var(--text-primary) !important;
+}
+.q-menu .q-item:hover,
+.q-menu .q-item--active {
+    background: var(--bg-surface-hover) !important;
+}
+.q-menu .q-item__label {
+    color: var(--text-primary) !important;
+}
+"""
+
 
 class YoDaBrowser:
     """Main browser UI for YoDa — manages layout, controls and state."""
@@ -41,6 +237,7 @@ class YoDaBrowser:
     # per-image state
     current_labels: list[LabelObject] = []
     current_label_path: Path | None = None
+    current_image_path: Path | None = None
     image_object: Image.Image | None = None
 
     # V2: class visibility filter
@@ -48,20 +245,35 @@ class YoDaBrowser:
 
     # V3: interaction mode and drawing state
     interaction_mode: str  # "edit" or "draw"
-    drawing_vertices: list[tuple[float, float]]  # pixel coords being drawn
-    drawing_class_id: int  # class ID for new object
-    selected_object_index: int | None  # index of the currently-selected object
+    drawing_vertices: list[tuple[float, float]]
+    drawing_class_id: int
+    selected_object_index: int | None
 
     # UI elements (assigned during render)
     interactive_image: InteractiveImage
-    image_wrapper: ui.element  # inner wrapper that gets transform
-    image_container: ui.element  # outer scrollable container
+    image_wrapper: ui.element
+    image_container: ui.element
     object_list_container: ui.column  # type: ignore[assignment]
     message_label: ui.label  # type: ignore[assignment]
     edit_mode_btn: ui.button  # type: ignore[assignment]
     draw_mode_btn: ui.button  # type: ignore[assignment]
     delete_btn: ui.button  # type: ignore[assignment]
     draw_class_select: ui.select  # type: ignore[assignment]
+
+    # V4 toggle buttons
+    seg_toggle_btn: ui.button  # type: ignore[assignment]
+    bbox_toggle_btn: ui.button  # type: ignore[assignment]
+    classid_toggle_btn: ui.button  # type: ignore[assignment]
+    classname_toggle_btn: ui.button  # type: ignore[assignment]
+
+    # V4 status bar
+    status_file_label: ui.label  # type: ignore[assignment]
+    status_dims_label: ui.label  # type: ignore[assignment]
+    status_objects_label: ui.label  # type: ignore[assignment]
+    status_mode_label: ui.label  # type: ignore[assignment]
+
+    # V4 object count badge
+    objects_count_badge: ui.badge  # type: ignore[assignment]
 
     def __init__(self, config: YoDaConfig) -> None:
         self.config = config
@@ -71,8 +283,8 @@ class YoDaBrowser:
         self.tree_data = fileops.get_file_tree(self.image_base_path)
         self.current_labels = []
         self.current_label_path = None
+        self.current_image_path = None
         self.hidden_classes = set()
-        # V3 state
         self.interaction_mode = "edit"
         self.drawing_vertices = []
         self.drawing_class_id = next(iter(self.class_map), 0)
@@ -84,117 +296,160 @@ class YoDaBrowser:
 
     def render(self) -> None:
         """Build the main page layout."""
-        # Remove default page margin / padding so the app fills the viewport
-        ui.add_head_html(
-            "<style>"
-            "html, body { margin: 0; padding: 0; overflow: hidden; "
-            "height: 100%; }"
-            ".nicegui-content { padding: 0 !important; }"
-            "</style>"
-        )
+        ui.add_head_html(f"<style>{_THEME_CSS}</style>")
 
-        # --- Right drawer: object list ---
+        # --- Right drawer (inspector) — open by default ---
         with (
-            ui.right_drawer(value=False, fixed=False)
-            .classes("bg-gray-800 p-3")
-            .props("width=300 bordered") as self.right_drawer
+            ui.right_drawer(value=True, fixed=False)
+            .props("width=280 bordered")
+            .style(
+                "background: var(--bg-surface) !important; "
+                "border-left: 1px solid var(--border) !important; "
+                "padding: 8px 10px;"
+            ) as self.right_drawer
         ):
-            # --- Class legend with visibility toggles ---
-            ui.label("Classes").classes("text-lg font-bold text-white mb-2")
-            with ui.scroll_area().classes("w-full").style("max-height: 50%;"):
-                self.class_legend_container = ui.column().classes("w-full gap-1")
-                self._build_class_legend()
+            self._build_inspector_panel()
 
-            ui.separator().classes("my-2")
-
-            # --- Object list ---
-            ui.label("Objects").classes("text-lg font-bold text-white mb-2")
-            with ui.scroll_area().classes("w-full").style("max-height: 50%;"):
-                self.object_list_container = ui.column().classes("w-full gap-1")
-                with self.object_list_container:
-                    ui.label("No image loaded").classes("text-xs text-gray-400")
-
-        # --- Main layout: left tree | center image ---
+        # --- Main layout: left tree | center ---
         with (
-            ui.splitter(value=20).classes("w-full").style("height: 100vh;") as splitter
+            ui.splitter(value=15).classes("w-full").style("height: 100vh;") as splitter
         ):
             # Left pane: file tree
-            with splitter.before, ui.column().classes("w-full h-full p-2"):
-                ui.label("Images").classes("text-lg font-bold")
-                tree = ui.tree(self.tree_data, on_select=self._on_tree_select)
-                tree.classes("w-full")
+            with splitter.before:
+                with (
+                    ui.column()
+                    .classes("w-full h-full")
+                    .style(
+                        "background: var(--bg-surface); "
+                        "border-right: 1px solid var(--border); "
+                        "padding: 8px;"
+                    )
+                ):
+                    ui.label("IMAGES").classes("yoda-section-header")
+                    with ui.scroll_area().classes("w-full").style("flex: 1;"):
+                        tree = ui.tree(self.tree_data, on_select=self._on_tree_select)
+                        tree.classes("w-full")
+                        tree.props("dense")
 
-            # Right pane (center): toolbar + image viewer
-            with (
-                splitter.after,
-                ui.column()
-                .classes("w-full h-full relative bg-gray-900")
-                .style("overflow: hidden;"),
-            ):
-                self._build_toolbar()
-                self._build_image_viewer()
+            # Right pane: toolbar + image + status bar
+            with splitter.after:
+                with (
+                    ui.column()
+                    .classes("w-full h-full")
+                    .style("overflow: hidden; gap: 0;")
+                ):
+                    self._build_toolbar()
+                    self._build_image_viewer()
+                    self._build_status_bar()
+
+    # ------------------------------------------------------------------
+    # Inspector panel (right)
+    # ------------------------------------------------------------------
+
+    def _build_inspector_panel(self) -> None:
+        """Build the right inspector panel content."""
+        # --- Class legend ---
+        ui.label("CLASSES").classes("yoda-section-header")
+        with ui.scroll_area().classes("w-full").style("max-height: 45%;"):
+            self.class_legend_container = (
+                ui.column().classes("w-full").style("gap: 2px;")
+            )
+            self._build_class_legend()
+
+        ui.element("div").style(
+            "height: 1px; background: var(--border); margin: 8px 0;"
+        )
+
+        # --- Object list ---
+        with ui.row().classes("items-center w-full").style("gap: 8px;"):
+            ui.label("OBJECTS").classes("yoda-section-header").style("flex: 1;")
+            self.objects_count_badge = ui.badge("0").props(
+                "color=grey-8 text-color=white"
+            )
+
+        with ui.scroll_area().classes("w-full").style("flex: 1;"):
+            self.object_list_container = (
+                ui.column().classes("w-full").style("gap: 4px;")
+            )
+            with self.object_list_container:
+                ui.label("No image loaded").style(
+                    "font-size: 12px; color: var(--text-muted);"
+                )
+
+    # ------------------------------------------------------------------
+    # Toolbar
+    # ------------------------------------------------------------------
 
     def _build_toolbar(self) -> None:
-        """Build the top toolbar with display toggles and class legend."""
-        with ui.row().classes(
-            "w-full p-2 bg-gray-800 items-center gap-4 z-10 flex-wrap"
+        """Build the compact top toolbar with grouped controls."""
+        with (
+            ui.row()
+            .classes("w-full items-center yoda-toolbar")
+            .style(
+                "background: var(--bg-surface); "
+                "height: 40px; min-height: 40px; max-height: 40px; "
+                "padding: 0 8px; gap: 8px; "
+                "border-bottom: 1px solid var(--border); "
+                "z-index: 10; flex-shrink: 0;"
+            )
         ):
-            ui.label("Display:").classes("text-white font-bold")
-
-            ui.switch(
-                "Seg. Masks",
-                value=self.show_segmask,
-                on_change=self._on_toggle_segmask,
-            ).props("color=green dense")
-
-            ui.switch(
-                "Bounding Boxes",
-                value=self.show_bbox,
-                on_change=self._on_toggle_bbox,
-            ).props("color=blue dense")
-
-            ui.switch(
-                "Class ID",
-                value=self.show_class_id,
-                on_change=self._on_toggle_class_id,
-            ).props("color=orange dense")
-
-            ui.switch(
-                "Class Name",
-                value=self.show_class_name,
-                on_change=self._on_toggle_class_name,
-            ).props("color=purple dense")
-
-            ui.separator().props("vertical").classes("mx-2")
-
-            # V3: Interaction mode buttons
-            self.edit_mode_btn = (
-                ui.button(
-                    icon="pan_tool",
-                    on_click=self._set_edit_mode,
+            # --- Display toggles ---
+            with ui.element("div").classes("yoda-btn-group"):
+                self.seg_toggle_btn = (
+                    ui.button(icon="layers", on_click=self._toggle_segmask)
+                    .props("flat dense unelevated size=sm")
+                    .classes("yoda-toggle-active")
+                    .tooltip("Segmentation Masks (M)")
                 )
-                .props("flat color=yellow dense")
-                .tooltip("Edit / Pan mode")
-            )
-            self.draw_mode_btn = (
-                ui.button(
-                    icon="add",
-                    on_click=self._set_draw_mode,
+                self.bbox_toggle_btn = (
+                    ui.button(
+                        icon="check_box_outline_blank", on_click=self._toggle_bbox
+                    )
+                    .props("flat dense unelevated size=sm")
+                    .classes("yoda-toggle-inactive")
+                    .tooltip("Bounding Boxes (B)")
                 )
-                .props("flat color=white dense")
-                .tooltip("Add object")
-            )
-            self.delete_btn = (
-                ui.button(
-                    icon="delete",
-                    on_click=self._on_delete_selected,
+                self.classid_toggle_btn = (
+                    ui.button(icon="tag", on_click=self._toggle_class_id)
+                    .props("flat dense unelevated size=sm")
+                    .classes("yoda-toggle-inactive")
+                    .tooltip("Class ID (I)")
                 )
-                .props("flat color=red dense")
-                .tooltip("Delete selected object")
+                self.classname_toggle_btn = (
+                    ui.button(icon="label", on_click=self._toggle_class_name)
+                    .props("flat dense unelevated size=sm")
+                    .classes("yoda-toggle-inactive")
+                    .tooltip("Class Name (N)")
+                )
+
+            # Separator
+            ui.element("div").style(
+                "width: 1px; height: 20px; background: var(--border);"
             )
+
+            # --- Mode buttons ---
+            with ui.element("div").classes("yoda-btn-group"):
+                self.edit_mode_btn = (
+                    ui.button(icon="pan_tool", on_click=self._set_edit_mode)
+                    .props("flat dense unelevated size=sm")
+                    .classes("yoda-toggle-active")
+                    .tooltip("Edit / Pan mode (E)")
+                )
+                self.draw_mode_btn = (
+                    ui.button(icon="edit", on_click=self._set_draw_mode)
+                    .props("flat dense unelevated size=sm")
+                    .classes("yoda-toggle-inactive")
+                    .tooltip("Draw mode (D)")
+                )
+                self.delete_btn = (
+                    ui.button(icon="delete_outline", on_click=self._on_delete_selected)
+                    .props("flat dense unelevated size=sm")
+                    .classes("yoda-toggle-inactive")
+                    .tooltip("Delete selected (Del)")
+                )
             self.delete_btn.set_enabled(False)
 
-            # V3: Class selector for new objects
+            # Class selector for draw mode
             class_options: dict[int, str] = {}
             for cid, cname in self.class_map.items():
                 class_options[cid] = cname
@@ -206,60 +461,61 @@ class YoDaBrowser:
                     value=self.drawing_class_id,
                     on_change=lambda e: setattr(self, "drawing_class_id", e.value),
                 )
-                .props("dense options-dense borderless")
-                .classes("text-xs text-white")
-                .style("min-width: 100px;")
+                .props("dense options-dense outlined")
+                .style("min-width: 120px; font-size: 12px; color: var(--text-primary);")
                 .tooltip("Class for new objects")
             )
 
-            ui.separator().props("vertical").classes("mx-2")
+            # Separator
+            ui.element("div").style(
+                "width: 1px; height: 20px; background: var(--border);"
+            )
 
-            # Zoom controls
-            ui.button(
-                icon="fit_screen",
-                on_click=self._fit_to_screen,
-            ).props("flat color=white dense").tooltip("Fit to screen")
-            ui.button(
-                icon="zoom_in",
-                on_click=self._zoom_in,
-            ).props("flat color=white dense").tooltip("Zoom in")
-            ui.button(
-                icon="zoom_out",
-                on_click=self._zoom_out,
-            ).props("flat color=white dense").tooltip("Zoom out")
-            ui.button(
-                "100%",
-                on_click=self._zoom_100,
-            ).props("flat color=white dense").tooltip("Zoom to 100%")
+            # --- Zoom controls ---
+            with ui.element("div").classes("yoda-btn-group"):
+                ui.button(icon="fit_screen", on_click=self._fit_to_screen).props(
+                    "flat dense unelevated size=sm"
+                ).classes("yoda-toggle-inactive").tooltip("Fit to screen (F)")
+                ui.button(icon="zoom_in", on_click=self._zoom_in).props(
+                    "flat dense unelevated size=sm"
+                ).classes("yoda-toggle-inactive").tooltip("Zoom in (+)")
+                ui.button(icon="zoom_out", on_click=self._zoom_out).props(
+                    "flat dense unelevated size=sm"
+                ).classes("yoda-toggle-inactive").tooltip("Zoom out (-)")
+                ui.button(icon="crop_free", on_click=self._zoom_100).props(
+                    "flat dense unelevated size=sm"
+                ).classes("yoda-toggle-inactive").tooltip("100% zoom")
 
-            ui.separator().props("vertical").classes("mx-2")
+            # Spacer to push inspector toggle to far right
+            ui.element("div").style("flex: 1;")
 
-            # Toggle button for object list drawer
+            # Inspector drawer toggle
             ui.button(
-                icon="list",
+                icon="view_sidebar",
                 on_click=lambda: self.right_drawer.toggle(),
-            ).props("flat color=white dense").tooltip("Toggle object list")
+            ).props("flat dense unelevated round size=sm").style(
+                "color: var(--text-secondary);"
+            ).tooltip("Toggle inspector")
+
+    # ------------------------------------------------------------------
+    # Image viewer
+    # ------------------------------------------------------------------
 
     def _build_image_viewer(self) -> None:
         """Build the image container with the interactive image."""
-        # Outer container: fills remaining space, hidden overflow (pan via JS)
         self.image_container = (
             ui.element("div")
-            .classes("w-full relative")
+            .classes("w-full relative yoda-canvas-bg")
             .style("flex: 1 1 0; overflow: hidden; position: relative; cursor: grab;")
         )
 
         with self.image_container:
-            self.message_label = (
-                ui.label("Select an image from the tree")
-                .classes("text-gray-400")
-                .style(
-                    "position: absolute; top: 50%; left: 50%; "
-                    "transform: translate(-50%, -50%); z-index: 1;"
-                )
+            self.message_label = ui.label("Select an image from the tree").style(
+                "position: absolute; top: 50%; left: 50%; "
+                "transform: translate(-50%, -50%); z-index: 1; "
+                "color: var(--text-muted); font-size: 14px;"
             )
 
-            # Inner wrapper that receives the CSS transform for zoom + pan
             self.image_wrapper = ui.element("div").style(
                 "transform-origin: 0 0; "
                 "transform: translate(0px, 0px) scale(1); "
@@ -280,11 +536,84 @@ class YoDaBrowser:
             self.interactive_image.visible = False
             self.image_wrapper.visible = False
 
-        # V3: Keyboard handler for draw mode (Enter / Escape)
         ui.keyboard(on_key=self._on_key_event)
-
-        # Inject client-side JS for wheel-zoom and drag-pan
         self._inject_zoom_pan_js()
+
+    # ------------------------------------------------------------------
+    # Status bar
+    # ------------------------------------------------------------------
+
+    def _build_status_bar(self) -> None:
+        """Build the bottom status bar."""
+        with ui.element("div").classes("yoda-status-bar"):
+            self.status_file_label = ui.label("No file loaded").style(
+                "flex: 1; overflow: hidden; text-overflow: ellipsis; "
+                "white-space: nowrap;"
+            )
+            self.status_dims_label = ui.label("—")
+            self.status_objects_label = ui.label("0 objects")
+            self.status_mode_label = ui.label("Edit mode").style(
+                "color: var(--accent);"
+            )
+
+    def _update_status_bar(self) -> None:
+        """Refresh all status bar fields."""
+        # File name
+        if self.current_image_path is not None:
+            self.status_file_label.text = self.current_image_path.name
+        else:
+            self.status_file_label.text = "No file loaded"
+
+        # Dimensions
+        if self.image_object is not None:
+            w, h = self.image_object.width, self.image_object.height
+            self.status_dims_label.text = f"{w} × {h}"
+        else:
+            self.status_dims_label.text = "—"
+
+        # Object count
+        n = len(self.current_labels)
+        self.status_objects_label.text = f"{n} object{'s' if n != 1 else ''}"
+
+        # Mode
+        if self.interaction_mode == "draw":
+            self.status_mode_label.text = "Draw mode"
+            self.status_mode_label.style("color: var(--success);")
+        else:
+            self.status_mode_label.text = "Edit mode"
+            self.status_mode_label.style("color: var(--accent);")
+
+    # ------------------------------------------------------------------
+    # Display toggle handlers (V4 icon buttons)
+    # ------------------------------------------------------------------
+
+    def _toggle_segmask(self) -> None:
+        self.show_segmask = not self.show_segmask
+        self._update_toggle_btn(self.seg_toggle_btn, self.show_segmask)
+        self._refresh_overlay()
+
+    def _toggle_bbox(self) -> None:
+        self.show_bbox = not self.show_bbox
+        self._update_toggle_btn(self.bbox_toggle_btn, self.show_bbox)
+        self._refresh_overlay()
+
+    def _toggle_class_id(self) -> None:
+        self.show_class_id = not self.show_class_id
+        self._update_toggle_btn(self.classid_toggle_btn, self.show_class_id)
+        self._refresh_overlay()
+
+    def _toggle_class_name(self) -> None:
+        self.show_class_name = not self.show_class_name
+        self._update_toggle_btn(self.classname_toggle_btn, self.show_class_name)
+        self._refresh_overlay()
+
+    @staticmethod
+    def _update_toggle_btn(btn: ui.button, active: bool) -> None:
+        """Update a toggle button's visual state."""
+        if active:
+            btn.classes(remove="yoda-toggle-inactive", add="yoda-toggle-active")
+        else:
+            btn.classes(remove="yoda-toggle-active", add="yoda-toggle-inactive")
 
     # ------------------------------------------------------------------
     # Event handlers
@@ -298,24 +627,8 @@ class YoDaBrowser:
         if selected_path.is_file():
             self._load_image(selected_path)
 
-    def _on_toggle_segmask(self, e: events.ValueChangeEventArguments) -> None:
-        self.show_segmask = e.value
-        self._refresh_overlay()
-
-    def _on_toggle_bbox(self, e: events.ValueChangeEventArguments) -> None:
-        self.show_bbox = e.value
-        self._refresh_overlay()
-
-    def _on_toggle_class_id(self, e: events.ValueChangeEventArguments) -> None:
-        self.show_class_id = e.value
-        self._refresh_overlay()
-
-    def _on_toggle_class_name(self, e: events.ValueChangeEventArguments) -> None:
-        self.show_class_name = e.value
-        self._refresh_overlay()
-
     # ------------------------------------------------------------------
-    # V2: Class legend, class visibility, object hide/show, class change
+    # V2: Class legend, visibility, class change
     # ------------------------------------------------------------------
 
     def _build_class_legend(self) -> None:
@@ -323,24 +636,36 @@ class YoDaBrowser:
         self.class_legend_container.clear()
         with self.class_legend_container:
             if not self.class_map:
-                ui.label("No classes loaded").classes("text-xs text-gray-400")
+                ui.label("No classes loaded").style(
+                    "font-size: 12px; color: var(--text-muted);"
+                )
             else:
                 for class_id, name in self.class_map.items():
                     color_str = self.config.get_color_string(class_id)
                     visible = class_id not in self.hidden_classes
-                    with ui.row().classes("items-center gap-2 w-full"):
+                    with (
+                        ui.row()
+                        .classes("items-center w-full")
+                        .style(
+                            "gap: 6px; padding: 2px 4px; border-radius: 3px; "
+                            "min-height: 28px;"
+                        )
+                    ):
                         ui.checkbox(
                             value=visible,
                             on_change=lambda e, cid=class_id: (
                                 self._on_class_visibility_change(cid, e.value)
                             ),
-                        ).props("dense size=xs color=white")
+                        ).props("dense size=sm color=white")
+                        # Color swatch — 14×14 rounded square
                         ui.element("div").style(
-                            f"width: 10px; height: 10px; "
-                            f"border-radius: 50%; "
+                            f"width: 14px; height: 14px; "
+                            f"border-radius: 3px; "
                             f"background: {color_str}; flex-shrink: 0;"
                         )
-                        ui.label(name).classes("text-xs text-white")
+                        ui.label(name).style(
+                            "font-size: 13px; color: var(--text-primary);"
+                        )
 
     def _on_class_visibility_change(self, class_id: int, visible: bool) -> None:
         """Toggle visibility for all objects of a given class."""
@@ -348,7 +673,6 @@ class YoDaBrowser:
             self.hidden_classes.discard(class_id)
         else:
             self.hidden_classes.add(class_id)
-        # Update the visible flag on each label
         for label in self.current_labels:
             if label.class_id in self.hidden_classes:
                 label.visible = False
@@ -371,7 +695,6 @@ class YoDaBrowser:
         for label in self.current_labels:
             if label.index == label_index:
                 label.class_id = new_class_id
-                # Update visibility based on hidden_classes
                 label.visible = new_class_id not in self.hidden_classes
                 break
         self._refresh_overlay()
@@ -395,6 +718,7 @@ class YoDaBrowser:
         self._update_mode_buttons()
         self._update_cursor_and_handlers()
         self._refresh_overlay()
+        self._update_status_bar()
 
     def _set_draw_mode(self) -> None:
         """Switch to draw mode for adding new objects."""
@@ -406,21 +730,29 @@ class YoDaBrowser:
         self._update_mode_buttons()
         self._update_cursor_and_handlers()
         self._refresh_overlay()
+        self._update_status_bar()
 
     def _update_mode_buttons(self) -> None:
         """Highlight the active mode button."""
         if self.interaction_mode == "edit":
-            self.edit_mode_btn.props("color=yellow")
-            self.draw_mode_btn.props("color=white")
+            self.edit_mode_btn.classes(
+                remove="yoda-toggle-inactive", add="yoda-toggle-active"
+            )
+            self.draw_mode_btn.classes(
+                remove="yoda-toggle-active", add="yoda-toggle-inactive"
+            )
         else:
-            self.edit_mode_btn.props("color=white")
-            self.draw_mode_btn.props("color=yellow")
+            self.edit_mode_btn.classes(
+                remove="yoda-toggle-active", add="yoda-toggle-inactive"
+            )
+            self.draw_mode_btn.classes(
+                remove="yoda-toggle-inactive", add="yoda-toggle-active"
+            )
 
     def _update_cursor_and_handlers(self) -> None:
         """Update the cursor style and JS handlers based on the mode."""
         cid = self.image_container.id
         if self.interaction_mode == "draw":
-            # Crosshair cursor and disable pan
             ui.run_javascript(
                 f"(function(){{ "
                 f"  var c = document.getElementById('c{cid}');"
@@ -428,7 +760,6 @@ class YoDaBrowser:
                 f"}})();"
             )
         else:
-            # Grab cursor and enable pan
             ui.run_javascript(
                 f"(function(){{ "
                 f"  var c = document.getElementById('c{cid}');"
@@ -456,18 +787,13 @@ class YoDaBrowser:
         return inside
 
     def _on_image_click(self, e: events.MouseEventArguments) -> None:
-        """Handle click on the interactive image.
-
-        In *edit* mode: select the topmost polygon under the cursor.
-        In *draw* mode: add a vertex, or close the polygon.
-        """
+        """Handle click on the interactive image."""
         if self.image_object is None:
             return
 
         x, y = e.image_x, e.image_y
 
         if self.interaction_mode == "edit":
-            # Find the topmost visible polygon that contains the click point
             hit_index: int | None = None
             for label_obj in reversed(self.current_labels):
                 if not label_obj.visible:
@@ -482,7 +808,6 @@ class YoDaBrowser:
                     if bx <= x <= bx + bw and by <= y <= by + bh:
                         hit_index = label_obj.index
                         break
-            # Toggle off if clicking the same object again
             if hit_index == self.selected_object_index:
                 self.selected_object_index = None
             else:
@@ -492,15 +817,12 @@ class YoDaBrowser:
             self._update_delete_button()
             return
 
-        # Draw mode: add vertices
         if self.interaction_mode != "draw":
             return
         logger.info(f"Draw vertex at ({x:.1f}, {y:.1f})")
 
-        # Check if clicking near the first vertex to close the polygon
         if len(self.drawing_vertices) >= 3:
             fx, fy = self.drawing_vertices[0]
-            # Close threshold: 10px in image space
             dist = ((x - fx) ** 2 + (y - fy) ** 2) ** 0.5
             if dist < 10:
                 self._finish_drawing()
@@ -510,21 +832,46 @@ class YoDaBrowser:
         self._refresh_overlay()
 
     def _on_key_event(self, e: events.KeyEventArguments) -> None:
-        """Handle keyboard events for draw mode (Enter to finish, Escape to cancel)."""
+        """Handle keyboard events — shortcuts + draw mode keys."""
         if not e.action.keydown:
             return
-        if e.key == "Escape":
+
+        key = e.key
+
+        # --- Draw mode keys ---
+        if key == "Escape":
             if self.interaction_mode == "draw" and self.drawing_vertices:
                 self.drawing_vertices = []
                 self._refresh_overlay()
                 ui.notify("Drawing discarded", type="info")
             elif self.interaction_mode == "draw":
                 self._set_edit_mode()
-        elif e.key == "Enter":
+            return
+        if key == "Enter":
             if self.interaction_mode == "draw" and len(self.drawing_vertices) >= 3:
                 self._finish_drawing()
             elif self.interaction_mode == "draw":
                 ui.notify("Need at least 3 vertices", type="warning")
+            return
+
+        # --- Global keyboard shortcuts (V4) ---
+        if key.key == "e" if hasattr(key, "key") else key == "e":
+            self._set_edit_mode()
+        elif key.key == "d" if hasattr(key, "key") else key == "d":
+            self._set_draw_mode()
+        elif key == "Delete":
+            if self.selected_object_index is not None:
+                self._on_delete_selected()
+        elif key.key == "f" if hasattr(key, "key") else key == "f":
+            self._fit_to_screen()
+        elif key.key == "m" if hasattr(key, "key") else key == "m":
+            self._toggle_segmask()
+        elif key.key == "b" if hasattr(key, "key") else key == "b":
+            self._toggle_bbox()
+        elif key.key == "i" if hasattr(key, "key") else key == "i":
+            self._toggle_class_id()
+        elif key.key == "n" if hasattr(key, "key") else key == "n":
+            self._toggle_class_name()
 
     def _finish_drawing(self) -> None:
         """Complete the polygon drawing and store the new object."""
@@ -539,7 +886,6 @@ class YoDaBrowser:
             self.drawing_class_id,
             new_index,
         )
-        # Apply visibility from hidden_classes
         new_label.visible = new_label.class_id not in self.hidden_classes
 
         self.current_labels.append(new_label)
@@ -547,6 +893,7 @@ class YoDaBrowser:
         self._save_labels()
         self._refresh_overlay()
         self._rebuild_object_list()
+        self._update_status_bar()
         ui.notify(f"Object #{new_index + 1} added", type="positive")
 
     def _on_delete_object(self, label_index: int) -> None:
@@ -554,20 +901,17 @@ class YoDaBrowser:
         logger.info(f"Deleting object at index {label_index}")
         try:
             self.current_labels = delete_label(self.current_labels, label_index)
-            # Clear selection if the deleted object was selected
             if self.selected_object_index == label_index:
                 self.selected_object_index = None
-            # Re-validate selected index in case re-sequencing made it stale
             elif self.selected_object_index is not None:
                 valid_indices = {lbl.index for lbl in self.current_labels}
                 if self.selected_object_index not in valid_indices:
                     self.selected_object_index = None
             self._save_labels()
             self._refresh_overlay()
-            # Notify BEFORE rebuild: _rebuild_object_list clears the container
-            # which deletes the triggering button and invalidates the slot context.
             ui.notify("Object deleted", type="info")
             self._rebuild_object_list()
+            self._update_status_bar()
             logger.info(
                 f"Delete complete. {len(self.current_labels)} objects remaining"
             )
@@ -593,7 +937,6 @@ class YoDaBrowser:
         color = self.config.get_color_string(self.drawing_class_id)
         parts: list[str] = []
 
-        # Draw polyline connecting vertices
         if len(self.drawing_vertices) >= 2:
             points_str = " ".join(f"{p[0]},{p[1]}" for p in self.drawing_vertices)
             parts.append(
@@ -602,7 +945,6 @@ class YoDaBrowser:
                 f'stroke-width="2" stroke-dasharray="5,3" />'
             )
 
-        # Draw vertex circles
         for i, (vx, vy) in enumerate(self.drawing_vertices):
             r = 5 if i == 0 else 3
             fill = "white" if i == 0 else color
@@ -611,7 +953,6 @@ class YoDaBrowser:
                 f'fill="{fill}" stroke="{color}" stroke-width="2" />'
             )
 
-        # If we have >= 3 vertices, show a faint closing line to first vertex
         if len(self.drawing_vertices) >= 3:
             lx, ly = self.drawing_vertices[-1]
             fx, fy = self.drawing_vertices[0]
@@ -684,9 +1025,7 @@ class YoDaBrowser:
         ui.add_body_html(f"<script>{js}</script>")
 
     def _run_zoom_js(self, body: str) -> None:
-        """Run a JS snippet that has access to container *c*, wrapper *w*,
-        and the zoom-state object *s*.  The snippet must set s.scale,
-        s.panX, s.panY then call ap()."""
+        """Run a JS snippet with access to container *c*, wrapper *w*, state *s*."""
         cid = self.image_container.id
         wid = self.image_wrapper.id
         ui.run_javascript(
@@ -705,12 +1044,11 @@ class YoDaBrowser:
         )
 
     def _fit_to_screen(self) -> None:
-        """Scale the image so it fits entirely inside the visible container."""
+        """Scale the image so it fits entirely in the visible container."""
         if self.image_object is None:
             return
         iw = self.image_object.width
         ih = self.image_object.height
-        # A short timeout lets NiceGUI's WebSocket DOM patch land first.
         self._run_zoom_js(
             f"setTimeout(function(){{ "
             f"  var cw = c.clientWidth, ch = c.clientHeight; "
@@ -722,7 +1060,7 @@ class YoDaBrowser:
         )
 
     def _zoom_100(self) -> None:
-        """Reset zoom to 100 % (1 pixel = 1 pixel)."""
+        """Reset zoom to 100 %."""
         if self.image_object is None:
             return
         iw = self.image_object.width
@@ -768,38 +1106,31 @@ class YoDaBrowser:
         self.interactive_image.visible = True
         self.image_wrapper.visible = True
 
-        # Clear selection when loading a new image
         self.selected_object_index = None
         self._update_delete_button()
 
-        # Open image
         self.image_object = Image.open(image_path)
+        self.current_image_path = image_path
         self.interactive_image.source = self.image_object
 
-        # Auto-fit the new image into the container
         self._fit_to_screen()
 
-        # Resolve corresponding label file
         label_path = self.label_base_path / image_path.relative_to(
             self.image_base_path
         ).with_suffix(".txt")
         self.current_label_path = label_path
         logger.info(f"Label file: {label_path}")
 
-        # Parse labels
         self.current_labels = parse_yolo_labels(
             label_path, self.image_object.width, self.image_object.height
         )
 
-        # Apply class visibility from the hidden_classes set
         for label in self.current_labels:
             label.visible = label.class_id not in self.hidden_classes
 
-        # Render overlay
         self._refresh_overlay()
-
-        # Update object list in drawer
         self._rebuild_object_list()
+        self._update_status_bar()
 
     def _refresh_overlay(self) -> None:
         """Re-render the SVG overlay from cached labels with current toggles."""
@@ -816,21 +1147,16 @@ class YoDaBrowser:
             class_map=self.class_map,
             selected_index=self.selected_object_index,
         )
-        # V3: Append drawing preview when in draw mode
         svg += self._render_drawing_preview_svg()
         self.interactive_image.content = svg
 
     def _rebuild_object_list(self) -> None:
-        """Populate the right-drawer object list with V2/V3 controls.
-
-        Each object row has:
-        - An eye icon to toggle visibility (hide/show)
-        - A color dot
-        - A class dropdown to change the object's class
-        - The object type badge
-        - A delete button (V3)
-        """
+        """Populate the inspector object list with V4 styled rows."""
         self.object_list_container.clear()
+
+        # Update badge count
+        n = len(self.current_labels)
+        self.objects_count_badge.text = str(n)
 
         if not self.current_labels:
             with self.object_list_container:
@@ -840,14 +1166,12 @@ class YoDaBrowser:
                     or not self.current_label_path.exists()
                     else "No objects in label file"
                 )
-                ui.label(msg).classes("text-xs text-gray-400")
+                ui.label(msg).style("font-size: 12px; color: var(--text-muted);")
             return
 
-        # Build class options for the dropdown
         class_options: dict[int, str] = {}
         for cid, cname in self.class_map.items():
             class_options[cid] = cname
-        # Also add any class IDs present in labels but not in class_map
         for label_obj in self.current_labels:
             if label_obj.class_id not in class_options:
                 class_options[label_obj.class_id] = f"class {label_obj.class_id}"
@@ -855,23 +1179,23 @@ class YoDaBrowser:
         with self.object_list_container:
             for label_obj in self.current_labels:
                 color_str = self.config.get_color_string(label_obj.class_id)
-                obj_type = "bbox" if label_obj.label_type == "bbox" else "poly"
                 idx = label_obj.index
                 is_selected = idx == self.selected_object_index
-                row_bg = (
-                    "background: rgba(255,255,255,0.12); border-radius: 4px;"
-                    if is_selected
-                    else ""
-                )
 
-                with ui.row().classes("items-center gap-1 w-full").style(row_bg):
-                    # Eye icon toggle for visibility
+                row_classes = "yoda-object-row"
+                if is_selected:
+                    row_classes += " yoda-object-selected"
+
+                with ui.element("div").classes(row_classes):
+                    # Eye icon toggle
                     ui.button(
                         icon=("visibility" if label_obj.visible else "visibility_off"),
                         on_click=lambda _e, i=idx, v=label_obj.visible: (
                             self._on_object_visibility_toggle(i, not v)
                         ),
-                    ).props("flat dense size=xs color=white padding=none")
+                    ).props("flat dense size=xs padding=none").style(
+                        "color: var(--text-secondary); min-width: 24px;"
+                    )
 
                     # Color dot
                     ui.element("div").style(
@@ -880,24 +1204,27 @@ class YoDaBrowser:
                     )
 
                     # Object index
-                    ui.label(f"#{idx + 1}").classes("text-white text-xs")
+                    ui.label(f"#{idx + 1}").style(
+                        "font-size: 12px; font-weight: 600; "
+                        "color: var(--text-secondary); min-width: 24px;"
+                    )
 
                     # Class dropdown
                     ui.select(
                         options=class_options,
                         value=label_obj.class_id,
                         on_change=lambda e, i=idx: self._on_class_change(i, e.value),
-                    ).props("dense options-dense borderless").classes(
-                        "text-xs text-white"
-                    ).style("min-width: 80px; flex: 1;")
+                    ).props("dense options-dense borderless").style(
+                        "min-width: 80px; flex: 1; font-size: 12px; "
+                        "color: var(--text-primary);"
+                    )
 
-                    # Type badge
-                    ui.label(f"[{obj_type}]").classes("text-gray-400 text-xs")
-
-                    # V3: Delete button
+                    # Delete button (hidden until hover via CSS)
                     ui.button(
                         icon="delete",
                         on_click=lambda _e, i=idx: self._on_delete_object(i),
-                    ).props("flat dense size=xs color=red padding=none").tooltip(
-                        "Delete object"
-                    )
+                    ).props("flat dense size=xs padding=none").classes(
+                        "yoda-delete-btn"
+                    ).style(
+                        "color: var(--danger); opacity: 0; min-width: 24px;"
+                    ).tooltip("Delete object")
