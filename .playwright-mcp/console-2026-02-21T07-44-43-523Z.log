@@ -1,0 +1,11 @@
+[   33857ms] TypeError: Cannot read properties of undefined (reading 'clientWidth')
+    at eval (eval at <anonymous> (http://127.0.0.1:8080/_nicegui/3.7.1/static/nicegui.js:325:36), <anonymous>:3:26)
+    at http://127.0.0.1:8080/_nicegui/3.7.1/static/nicegui.js:325:36
+    at new Promise (<anonymous>)
+    at runJavascript (http://127.0.0.1:8080/_nicegui/3.7.1/static/nicegui.js:325:3)
+    at run_javascript (http://127.0.0.1:8080/_nicegui/3.7.1/static/nicegui.js:511:34)
+    at http://127.0.0.1:8080/_nicegui/3.7.1/static/nicegui.js:530:41
+    at n.<anonymous> (http://127.0.0.1:8080/_nicegui/3.7.1/static/nicegui.js:536:23)
+    at n.<anonymous> (http://127.0.0.1:8080/_nicegui/3.7.1/static/socket.io.min.js:6:7218)
+    at o.emitEvent (http://127.0.0.1:8080/_nicegui/3.7.1/static/socket.io.min.js:6:38535)
+    at o.onevent (http://127.0.0.1:8080/_nicegui/3.7.1/static/socket.io.min.js:6:38297)

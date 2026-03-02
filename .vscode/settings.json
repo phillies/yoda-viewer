@@ -1,0 +1,11 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "ForEach-Object": true,
+        "Start-Job": true,
+        "Out-Null": true,
+        "Receive-Job": true,
+        "Get-Job": true,
+        "Stop-Job": true,
+        "Remove-Job": true
+    }
+}
