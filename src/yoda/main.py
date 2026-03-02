@@ -108,6 +108,7 @@ def start_server(
         host=config.settings.host,
         port=effective_port,
         title="YoDa Viewer",
+        storage_secret=config.settings.storage_secret,
     )
 
 

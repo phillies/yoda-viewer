@@ -1,3 +1,5 @@
+import os
+import secrets
 from pathlib import Path
 
 import yaml
@@ -46,6 +48,14 @@ class YoDaSettings(BaseSettings):
     port: int = Field(
         default=8080,
         description="Port number for the NiceGUI server. Defaults to 8080.",
+    )
+    storage_secret: str = Field(
+        default_factory=lambda: os.environ.get(
+            "YODA_STORAGE_SECRET", secrets.token_hex(32)
+        ),
+        description="Secret key used to sign the session cookie for user storage. "
+        "Set YODA_STORAGE_SECRET to a fixed value to persist sessions across "
+        "server restarts.",
     )
 
 
