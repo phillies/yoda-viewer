@@ -1184,8 +1184,20 @@ class YoDaBrowser:
         self.current_image_path = image_path
         self.interactive_image.source = self.image_object
 
-        # Persist the path so it can be restored after a browser refresh.
-        app.storage.user["last_image"] = str(image_path)
+        # Persist a path relative to the dataset root so it can be restored
+        # robustly after a browser refresh, even if the root moves.
+        try:
+            relative_image_path = image_path.relative_to(self.image_base_path)
+        except ValueError:
+            # If the image is not under image_base_path, fall back to the filename.
+            logger.warning(
+                "Image %s is not under image_base_path %s; "
+                "falling back to storing only the filename.",
+                image_path,
+                self.image_base_path,
+            )
+            relative_image_path = image_path.name
+        app.storage.user["last_image"] = str(relative_image_path)
 
         self._fit_to_screen()
 
