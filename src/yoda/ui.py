@@ -689,7 +689,14 @@ class YoDaBrowser:
         path = Path(last)
         if path.exists() and path.is_file():
             logger.info(f"Restoring last image: {path}")
-            self._load_image(path)
+            try:
+                self._load_image(path)
+            except ValueError as exc:
+                logger.warning(
+                    f"Failed to restore last image {path!s}; clearing stored value: {exc}"
+                )
+                # Clear invalid last_image to avoid repeated restore failures
+                app.storage.user["last_image"] = None
 
     # ------------------------------------------------------------------
     # V2: Class legend, visibility, class change
