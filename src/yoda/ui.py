@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from loguru import logger
-from nicegui import events, ui
+from nicegui import app, events, ui
 from nicegui.elements.interactive_image import InteractiveImage
 from PIL import Image
 
@@ -218,6 +218,25 @@ button, .q-toggle, .q-checkbox, .q-select, .q-btn {
 """
 
 
+def _find_and_update_node(
+    nodes: list[dict[str, object]],
+    node_id: str,
+    children: list[dict[str, object]],
+) -> bool:
+    """Recursively find *node_id* in *nodes* and replace its children.
+
+    Returns ``True`` if the node was found and updated, ``False`` otherwise.
+    """
+    for node in nodes:
+        if node.get("id") == node_id:
+            node["children"] = children
+            return True
+        sub = node.get("children")
+        if isinstance(sub, list) and _find_and_update_node(sub, node_id, children):
+            return True
+    return False
+
+
 class YoDaBrowser:
     """Main browser UI for YoDa — manages layout, controls and state."""
 
@@ -259,6 +278,7 @@ class YoDaBrowser:
     draw_mode_btn: ui.button  # type: ignore[assignment]
     delete_btn: ui.button  # type: ignore[assignment]
     draw_class_select: ui.select  # type: ignore[assignment]
+    file_tree: ui.tree  # type: ignore[assignment]
 
     # V4 toggle buttons
     seg_toggle_btn: ui.button  # type: ignore[assignment]
@@ -289,6 +309,9 @@ class YoDaBrowser:
         self.drawing_vertices = []
         self.drawing_class_id = next(iter(self.class_map), 0)
         self.selected_object_index = None
+        # Lazy tree loading: track which directory nodes have been expanded/loaded
+        self._expanded_nodes: set[str] = set()
+        self._loaded_nodes: set[str] = set()
 
     # ------------------------------------------------------------------
     # Rendering
@@ -327,9 +350,13 @@ class YoDaBrowser:
                 ):
                     ui.label("IMAGES").classes("yoda-section-header")
                     with ui.scroll_area().classes("w-full").style("flex: 1;"):
-                        tree = ui.tree(self.tree_data, on_select=self._on_tree_select)
-                        tree.classes("w-full")
-                        tree.props("dense")
+                        self.file_tree = ui.tree(
+                            self.tree_data,
+                            on_select=self._on_tree_select,
+                            on_expand=self._on_tree_expand,
+                        )
+                        self.file_tree.classes("w-full")
+                        self.file_tree.props("dense")
 
             # Right pane: toolbar + image + status bar
             with splitter.after:
@@ -341,6 +368,9 @@ class YoDaBrowser:
                     self._build_toolbar()
                     self._build_image_viewer()
                     self._build_status_bar()
+
+        # Restore the last-viewed image if one was saved for this user.
+        ui.timer(0.1, self._restore_last_image, once=True)
 
     # ------------------------------------------------------------------
     # Inspector panel (right)
@@ -626,6 +656,47 @@ class YoDaBrowser:
         selected_path = Path(e.value)
         if selected_path.is_file():
             self._load_image(selected_path)
+
+    def _on_tree_expand(self, e: events.ValueChangeEventArguments) -> None:
+        """Lazily load directory children when a node is expanded for the first time."""
+        expanded_ids: set[str] = set(e.value) if e.value else set()
+        newly_expanded = expanded_ids - self._expanded_nodes
+        self._expanded_nodes = expanded_ids
+
+        for node_id in newly_expanded:
+            if node_id not in self._loaded_nodes:
+                self._lazy_load_node(node_id)
+
+    def _lazy_load_node(self, node_id: str) -> None:
+        """Replace the lazy placeholder children of a directory node."""
+        path = Path(node_id)
+        if not path.is_dir():
+            return
+        logger.info(f"Lazy-loading tree children for: {path}")
+        children = fileops.get_dir_children(path)
+        if _find_and_update_node(self.tree_data, node_id, children):
+            self._loaded_nodes.add(node_id)
+            # NiceGUI's ui.tree documents that node updates are pushed by
+            # writing directly to _props['nodes'] followed by update().
+            self.file_tree._props["nodes"] = self.tree_data  # noqa: SLF001
+            self.file_tree.update()
+
+    def _restore_last_image(self) -> None:
+        """Reload the image that was open when the user last left the app."""
+        last = app.storage.user.get("last_image")
+        if not last:
+            return
+        path = Path(last)
+        if path.exists() and path.is_file():
+            logger.info(f"Restoring last image: {path}")
+            try:
+                self._load_image(path)
+            except ValueError as exc:
+                logger.warning(
+                    f"Failed to restore last image {path!s}; clearing stored value: {exc}"
+                )
+                # Clear invalid last_image to avoid repeated restore failures
+                app.storage.user["last_image"] = None
 
     # ------------------------------------------------------------------
     # V2: Class legend, visibility, class change
@@ -1112,6 +1183,21 @@ class YoDaBrowser:
         self.image_object = Image.open(image_path)
         self.current_image_path = image_path
         self.interactive_image.source = self.image_object
+
+        # Persist a path relative to the dataset root so it can be restored
+        # robustly after a browser refresh, even if the root moves.
+        try:
+            relative_image_path = image_path.relative_to(self.image_base_path)
+        except ValueError:
+            # If the image is not under image_base_path, fall back to the filename.
+            logger.warning(
+                "Image %s is not under image_base_path %s; "
+                "falling back to storing only the filename.",
+                image_path,
+                self.image_base_path,
+            )
+            relative_image_path = image_path.name
+        app.storage.user["last_image"] = str(relative_image_path)
 
         self._fit_to_screen()
 
