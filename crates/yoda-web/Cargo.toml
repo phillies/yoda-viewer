@@ -15,12 +15,22 @@ axum.workspace = true
 dioxus = { workspace = true, features = ["fullstack"] }
 dioxus-cli-config.workspace = true
 dioxus-server.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 tokio.workspace = true
 tower-http.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 yoda-app = { path = "../yoda-app" }
+yoda-config = { path = "../yoda-config" }
+yoda-core = { path = "../yoda-core" }
+yoda-data = { path = "../yoda-data" }
 yoda-ui = { path = "../yoda-ui" }
+
+[dev-dependencies]
+image.workspace = true
+tempfile.workspace = true
+tower = { version = "0.5", features = ["util"] }
 
 [lints]
 workspace = true

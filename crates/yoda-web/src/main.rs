@@ -1,19 +1,29 @@
 #![allow(non_snake_case)]
 
-use yoda_ui::App;
+#[cfg(feature = "server")]
+use yoda_config::YoDaSettings;
+#[cfg(feature = "server")]
+use yoda_web::build_router;
 
 #[cfg(feature = "server")]
 #[tokio::main]
 async fn main() {
-    use dioxus_server::{DioxusRouterExt, ServeConfig};
     use tracing_subscriber::EnvFilter;
 
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
-    let address = dioxus_cli_config::fullstack_address_or_localhost();
-    let router = axum::Router::new().serve_dioxus_application(ServeConfig::new(), App);
+    let settings = YoDaSettings::from_env().unwrap_or_default();
+    let host = settings
+        .host
+        .clone()
+        .unwrap_or_else(|| dioxus_cli_config::fullstack_address_or_localhost().ip().to_string());
+    let address = std::net::SocketAddr::new(
+        host.parse().expect("parse YODA_HOST as IP address"),
+        settings.port,
+    );
+    let router = build_router(settings).expect("build yoda-web router");
     let listener = tokio::net::TcpListener::bind(address)
         .await
         .expect("bind yoda-web listener");
@@ -25,5 +35,5 @@ async fn main() {
 
 #[cfg(not(feature = "server"))]
 fn main() {
-    dioxus::launch(App);
+    dioxus::launch(yoda_ui::App);
 }
