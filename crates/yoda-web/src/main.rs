@@ -35,5 +35,5 @@ async fn main() {
 
 #[cfg(not(feature = "server"))]
 fn main() {
-    dioxus::launch(yoda_ui::App);
+    dioxus::launch(yoda_ui::RootApp);
 }

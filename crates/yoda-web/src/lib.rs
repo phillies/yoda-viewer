@@ -14,7 +14,7 @@ use yoda_app::RepositoryBackedAppServices;
 use yoda_config::YoDaSettings;
 use yoda_core::LabelObject;
 use yoda_data::{DatasetRepository, LocalDatasetRepository, TreeNode};
-use yoda_ui::App;
+use yoda_ui::RootApp;
 
 #[derive(Debug, Clone)]
 pub struct BackendState {
@@ -164,17 +164,18 @@ impl From<yoda_data::RepositoryError> for ApiError {
 }
 
 pub fn build_router(settings: YoDaSettings) -> Result<Router, ApiError> {
+    ensure_public_dir()?;
     let state = Arc::new(BackendState::from_settings(settings)?);
     Ok(Router::<FullstackState>::new()
         .nest("/api", api_router(state.clone()))
-        .serve_dioxus_application(ServeConfig::new(), App))
+        .serve_dioxus_application(ServeConfig::new(), RootApp))
 }
 
 pub fn build_api_router(settings: YoDaSettings) -> Result<Router, ApiError> {
     let state = Arc::new(BackendState::from_settings(settings)?);
     Ok(Router::<FullstackState>::new()
         .nest("/api", api_router(state))
-        .serve_api_application(ServeConfig::new(), App))
+        .serve_api_application(ServeConfig::new(), RootApp))
 }
 
 fn api_router(state: Arc<BackendState>) -> Router<FullstackState> {
@@ -188,6 +189,16 @@ fn api_router(state: Arc<BackendState>) -> Router<FullstackState> {
         .route("/class-map", get(class_map))
         .route("/color-map", get(color_map))
         .layer(Extension(state))
+}
+
+fn ensure_public_dir() -> Result<(), ApiError> {
+    let executable = std::env::current_exe()?;
+    let Some(parent) = executable.parent() else {
+        return Err(ApiError::internal("unable to determine executable directory"));
+    };
+
+    fs::create_dir_all(parent.join("public"))?;
+    Ok(())
 }
 
 async fn health() -> Json<HealthResponse> {
