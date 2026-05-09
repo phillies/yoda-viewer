@@ -1,0 +1,46 @@
+[workspace]
+members = [
+    "crates/yoda-app",
+    "crates/yoda-config",
+    "crates/yoda-core",
+    "crates/yoda-data",
+    "crates/yoda-desktop",
+    "crates/yoda-ui",
+    "crates/yoda-web",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Phil Lies <phil@lies.io>"]
+repository = "https://example.invalid/yoda"
+
+[workspace.dependencies]
+anyhow = "1.0"
+assert_fs = "1.1"
+axum = { version = "0.8", features = ["json", "macros"] }
+camino = { version = "1.1", features = ["serde1"] }
+dioxus = { version = "0.7.2", features = ["router"] }
+dioxus-cli-config = "0.7.2"
+dioxus-server = "0.7.2"
+image = { version = "0.25", default-features = false, features = ["bmp", "jpeg", "png", "webp"] }
+insta = { version = "1.43", features = ["yaml"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+tempfile = "3.20"
+thiserror = "2.0"
+tokio = { version = "1.48", features = ["macros", "rt-multi-thread", "signal", "sync"] }
+tower-http = { version = "0.6", features = ["fs", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unwrap_used = "deny"

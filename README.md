@@ -47,3 +47,29 @@ All settings are read from environment variables (or a `.env` file):
 - **Change class**: select a new class from the dropdown next to any object — the label file is updated on disk automatically.
 - **Hide / show by class**: use the class-legend checkboxes.
 - **Hide / show individual objects**: use the eye-icon buttons in the object list.
+
+## Rust Rewrite
+
+The Rust implementation lives alongside the current Python application during migration. The Python app remains the behavioral reference until the Rust workspace reaches explicit parity checkpoints.
+
+### Workspace
+
+- crates/yoda-core: labels, geometry, and shared domain types
+- crates/yoda-config: dataset YAML and runtime configuration
+- crates/yoda-data: filesystem-backed repository layer
+- crates/yoda-app: app state and action orchestration
+- crates/yoda-ui: shared Dioxus components
+- crates/yoda-web: Axum plus Dioxus fullstack entrypoint
+- crates/yoda-desktop: Dioxus desktop entrypoint
+
+### Rust commands
+
+```bash
+cargo fmt --all
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace
+pwsh ./scripts/rust-dev.ps1 serve-desktop
+pwsh ./scripts/rust-dev.ps1 serve-web
+```
+
+`dx` is required for the serve commands. If it is not installed locally yet, install the Dioxus CLI first and then rerun the script.

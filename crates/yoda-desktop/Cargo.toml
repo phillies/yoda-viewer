@@ -1,0 +1,13 @@
+[package]
+name = "yoda-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+dioxus = { workspace = true, features = ["desktop"] }
+yoda-ui = { path = "../yoda-ui" }
+
+[lints]
+workspace = true

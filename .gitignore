@@ -10,3 +10,7 @@ wheels/
 .venv
 
 example_data/
+target/
+.dx/
+dist/
+node_modules/
