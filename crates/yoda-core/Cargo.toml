@@ -6,10 +6,11 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-anyhow.workspace = true
-camino.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

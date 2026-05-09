@@ -1,15 +1,6 @@
-pub const CRATE_NAME: &str = "yoda-core";
+mod label;
 
-pub fn crate_name() -> &'static str {
-    CRATE_NAME
-}
-
-#[cfg(test)]
-mod tests {
-    use super::crate_name;
-
-    #[test]
-    fn exposes_crate_name() {
-        assert_eq!(crate_name(), "yoda-core");
-    }
-}
+pub use crate::label::{
+    create_label_from_pixels, delete_label, parse_yolo_labels, write_yolo_labels,
+    LabelObject, LabelType, PixelBBox, Point,
+};
