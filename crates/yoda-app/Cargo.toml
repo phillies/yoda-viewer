@@ -6,13 +6,15 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-anyhow.workspace = true
-camino.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 yoda-config = { path = "../yoda-config" }
 yoda-core = { path = "../yoda-core" }
 yoda-data = { path = "../yoda-data" }
+
+[dev-dependencies]
+image.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true

@@ -43,6 +43,7 @@ pub enum RepositoryError {
 pub trait DatasetRepository {
     fn list_root_nodes(&self) -> Result<Vec<TreeNode>, RepositoryError>;
     fn expand_directory(&self, path: &Path) -> Result<Vec<TreeNode>, RepositoryError>;
+    fn label_path_for_image(&self, image_path: &Path) -> Result<PathBuf, RepositoryError>;
     fn image_dimensions(&self, path: &Path) -> Result<(u32, u32), RepositoryError>;
     fn image_bytes(&self, path: &Path) -> Result<Vec<u8>, RepositoryError>;
     fn load_labels(&self, image_path: &Path) -> Result<Vec<LabelObject>, RepositoryError>;
@@ -81,6 +82,10 @@ impl DatasetRepository for LocalDatasetRepository {
 
     fn expand_directory(&self, path: &Path) -> Result<Vec<TreeNode>, RepositoryError> {
         Ok(get_dir_children(path))
+    }
+
+    fn label_path_for_image(&self, image_path: &Path) -> Result<PathBuf, RepositoryError> {
+        LocalDatasetRepository::label_path_for_image(self, image_path)
     }
 
     fn image_dimensions(&self, path: &Path) -> Result<(u32, u32), RepositoryError> {
