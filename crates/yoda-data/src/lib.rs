@@ -26,6 +26,38 @@ pub enum NodeIcon {
     Placeholder,
 }
 
+/// Lightweight node kind used by the flat tree index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NodeKind {
+    Folder,
+    Image,
+}
+
+/// A single entry in the flat dataset tree index.
+///
+/// IDs are assigned as sequential indices (0, 1, 2, …) matching the position
+/// in the `FlatIndex::nodes` vector, so `nodes[id as usize].id == id` always
+/// holds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FlatNode {
+    pub id: u32,
+    pub parent_id: Option<u32>,
+    pub name: String,
+    pub kind: NodeKind,
+    /// Absolute filesystem path as a UTF-8 string.
+    pub path: String,
+}
+
+/// Full dataset tree as a flat, serialisable list.
+///
+/// The list is ordered depth-first (folders before their contents).
+/// Reconstruct the parent→children mapping with [`build_children_map`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FlatIndex {
+    pub nodes: Vec<FlatNode>,
+    pub image_count: usize,
+}
+
 #[derive(Debug, Error)]
 pub enum RepositoryError {
     #[error(transparent)]
@@ -137,7 +169,9 @@ pub fn get_dir_children(path: &Path) -> Vec<TreeNode> {
     let Ok(entries) = fs::read_dir(path) else {
         return Vec::new();
     };
-    let mut items = entries
+    // Pre-compute the sort key once per entry to avoid O(n log n) allocations
+    // inside the comparator.
+    let mut items_with_keys: Vec<(PathBuf, bool, String)> = entries
         .flatten()
         .map(|entry| entry.path())
         .filter(|path| {
@@ -146,21 +180,23 @@ pub fn get_dir_children(path: &Path) -> Vec<TreeNode> {
                 .map(|name| !name.starts_with('.'))
                 .unwrap_or(false)
         })
-        .collect::<Vec<_>>();
+        .map(|path| {
+            let is_dir = path.is_dir();
+            let sort_key = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_lowercase())
+                .unwrap_or_default();
+            (path, is_dir, sort_key)
+        })
+        .collect();
 
-    items.sort_by(|left, right| {
-        let left_is_dir = left.is_dir();
-        let right_is_dir = right.is_dir();
-        (!left_is_dir, left.file_name().unwrap_or_default().to_string_lossy().to_lowercase())
-            .cmp(&(
-                !right_is_dir,
-                right.file_name().unwrap_or_default().to_string_lossy().to_lowercase(),
-            ))
+    items_with_keys.sort_by(|(_, a_is_dir, a_key), (_, b_is_dir, b_key)| {
+        (!a_is_dir, a_key).cmp(&(!b_is_dir, b_key))
     });
 
-    items
+    items_with_keys
         .into_iter()
-        .filter_map(|item| tree_node_for_path(&item))
+        .filter_map(|(path, _, _)| tree_node_for_path(&path))
         .collect()
 }
 
@@ -229,6 +265,152 @@ fn tree_node_for_path(path: &Path) -> Option<TreeNode> {
         children: Vec::new(),
         icon: NodeIcon::Image,
     })
+}
+
+// ─── Flat index scan ─────────────────────────────────────────────────────────
+
+/// Walk *root* synchronously and return a [`FlatIndex`] of every folder and
+/// image file found, excluding hidden entries (names starting with `.`).
+///
+/// Node IDs are assigned as sequential indices so that `nodes[id as usize].id
+/// == id` always holds.  The walk is depth-first, folders first within each
+/// directory level.
+pub fn scan_dataset_tree(root: &Path) -> FlatIndex {
+    let mut nodes: Vec<FlatNode> = Vec::new();
+    let mut image_count: usize = 0;
+    if root.is_dir() {
+        scan_dir_flat(root, None, &mut nodes, &mut image_count);
+    }
+    FlatIndex { nodes, image_count }
+}
+
+fn scan_dir_flat(
+    path: &Path,
+    parent_id: Option<u32>,
+    nodes: &mut Vec<FlatNode>,
+    image_count: &mut usize,
+) {
+    let Ok(entries) = fs::read_dir(path) else { return };
+
+    let mut items_with_keys: Vec<(PathBuf, bool, String)> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| !n.starts_with('.'))
+                .unwrap_or(false)
+        })
+        .map(|p| {
+            let is_dir = p.is_dir();
+            let sort_key = p
+                .file_name()
+                .map(|n| n.to_string_lossy().to_lowercase())
+                .unwrap_or_default();
+            (p, is_dir, sort_key)
+        })
+        .collect();
+
+    items_with_keys.sort_by(|(_, a_is_dir, a_key), (_, b_is_dir, b_key)| {
+        (!a_is_dir, a_key).cmp(&(!b_is_dir, b_key))
+    });
+
+    for (entry_path, is_dir, _) in items_with_keys {
+        let Some(name) = entry_path.file_name().and_then(|n| n.to_str()).map(str::to_owned) else {
+            continue;
+        };
+
+        if is_dir {
+            let id = nodes.len() as u32;
+            nodes.push(FlatNode {
+                id,
+                parent_id,
+                name,
+                kind: NodeKind::Folder,
+                path: entry_path.to_string_lossy().into_owned(),
+            });
+            scan_dir_flat(&entry_path, Some(id), nodes, image_count);
+        } else {
+            let ext = entry_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| format!(".{}", e.to_lowercase()))
+                .unwrap_or_default();
+            if IMAGE_EXTENSIONS.contains(&ext.as_str()) {
+                let id = nodes.len() as u32;
+                nodes.push(FlatNode {
+                    id,
+                    parent_id,
+                    name,
+                    kind: NodeKind::Image,
+                    path: entry_path.to_string_lossy().into_owned(),
+                });
+                *image_count += 1;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[cfg(test)]
+mod scan_tests {
+    use std::fs;
+    use tempfile::TempDir;
+    use super::{scan_dataset_tree, NodeKind};
+
+    fn make_dataset(layout: &[(&str, &[u8])]) -> TempDir {
+        let tmp = TempDir::new().expect("tempdir");
+        for (rel, content) in layout {
+            let dest = tmp.path().join(rel);
+            if let Some(parent) = dest.parent() {
+                fs::create_dir_all(parent).expect("mkdir");
+            }
+            fs::write(&dest, content).expect("write");
+        }
+        tmp
+    }
+
+    #[test]
+    fn scan_counts_images_and_skips_hidden() {
+        let tmp = make_dataset(&[
+            ("train/a.jpg", b""),
+            ("train/b.png", b""),
+            ("val/c.jpg", b""),
+            ("val/.hidden.jpg", b""),
+            ("val/notes.txt", b""),
+        ]);
+        let idx = scan_dataset_tree(tmp.path());
+        assert_eq!(idx.image_count, 3, "should count 3 images");
+        assert!(
+            idx.nodes.iter().all(|n| !n.name.starts_with('.')),
+            "hidden entries must be excluded"
+        );
+    }
+
+    #[test]
+    fn scan_id_matches_index() {
+        let tmp = make_dataset(&[
+            ("train/a.jpg", b""),
+            ("train/b.jpg", b""),
+        ]);
+        let idx = scan_dataset_tree(tmp.path());
+        for (i, node) in idx.nodes.iter().enumerate() {
+            assert_eq!(node.id as usize, i, "node.id must equal its position");
+        }
+    }
+
+    #[test]
+    fn scan_folders_before_images() {
+        let tmp = make_dataset(&[
+            ("b_folder/x.jpg", b""),
+            ("a.jpg", b""),
+        ]);
+        let idx = scan_dataset_tree(tmp.path());
+        // "b_folder" (a Folder) should appear before "a.jpg" (an Image)
+        let folder_pos = idx.nodes.iter().position(|n| n.kind == NodeKind::Folder).expect("folder");
+        let image_pos  = idx.nodes.iter().position(|n| n.kind == NodeKind::Image && n.parent_id.is_none()).expect("root image");
+        assert!(folder_pos < image_pos, "folders must sort before images");
+    }
 }
 
 #[cfg(test)]

@@ -16,7 +16,7 @@ use yoda_app::AppServices;
 use yoda_app::RepositoryBackedAppServices;
 use yoda_config::YoDaSettings;
 use yoda_core::{render_labels_to_svg, LabelObject, RenderOptions};
-use yoda_data::{DatasetRepository, LocalDatasetRepository, TreeNode};
+use yoda_data::{DatasetRepository, FlatIndex, FlatNode, LocalDatasetRepository, TreeNode, scan_dataset_tree};
 use yoda_ui::{RootApp, PAN_ZOOM_SCRIPT};
 
 const FALLBACK_CSS: &str = r#"
@@ -82,6 +82,7 @@ a { color: inherit; text-decoration: none; }
 pub struct BackendState {
     repository: LocalDatasetRepository,
     image_root: PathBuf,
+    flat_index: Arc<FlatIndex>,
 }
 
 impl BackendState {
@@ -92,9 +93,17 @@ impl BackendState {
             settings.label_base_path = canonical_dir(&settings.label_base_path)?;
         }
 
+        let flat_index = Arc::new(scan_dataset_tree(&image_root));
+        tracing::info!(
+            node_count = flat_index.nodes.len(),
+            image_count = flat_index.image_count,
+            "dataset tree scan complete"
+        );
+
         Ok(Self {
             repository: LocalDatasetRepository::new(settings),
             image_root,
+            flat_index,
         })
     }
 
@@ -172,6 +181,18 @@ pub struct ClassMapResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColorMapResponse {
     pub color_map: std::collections::HashMap<u32, [u8; 3]>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TreeStatusResponse {
+    pub node_count: usize,
+    pub image_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FlatIndexResponse {
+    pub nodes: Vec<FlatNode>,
+    pub image_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -279,6 +300,8 @@ where
         .route("/health", get(health))
         .route("/tree", get(list_tree))
         .route("/tree/children", get(list_children))
+        .route("/tree/status", get(tree_status))
+        .route("/tree/flat", get(tree_flat))
         .route("/image", get(image_bytes))
         .route("/image/metadata", get(image_metadata))
         .route("/labels", get(load_labels).put(save_labels))
@@ -367,6 +390,25 @@ async fn list_children(
         nodes: state.repository.expand_directory(&path)?,
     }))
 }
+
+async fn tree_status(
+    Extension(state): Extension<Arc<BackendState>>,
+) -> Json<TreeStatusResponse> {
+    Json(TreeStatusResponse {
+        node_count: state.flat_index.nodes.len(),
+        image_count: state.flat_index.image_count,
+    })
+}
+
+async fn tree_flat(
+    Extension(state): Extension<Arc<BackendState>>,
+) -> Json<FlatIndexResponse> {
+    Json(FlatIndexResponse {
+        nodes: state.flat_index.nodes.clone(),
+        image_count: state.flat_index.image_count,
+    })
+}
+
 
 async fn image_metadata(
     Extension(state): Extension<Arc<BackendState>>,

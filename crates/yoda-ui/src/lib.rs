@@ -6,7 +6,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use yoda_app::{apply_action, AccessMode, AppAction, AppEffect, AppState, LoadedImage};
 use yoda_core::{render_labels_to_svg, LabelObject, RenderOptions};
-use yoda_data::{NodeIcon, TreeNode, LAZY_PLACEHOLDER_SUFFIX};
+use yoda_data::{FlatNode, NodeIcon, NodeKind};
 
 pub const PAN_ZOOM_SCRIPT: &str = r#"
 (function () {
@@ -275,11 +275,6 @@ button, select { font: inherit; }
 "#;
 
 #[derive(Debug, Clone, Deserialize)]
-struct TreeNodesResponse {
-    nodes: Vec<TreeNode>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
 struct LabelsResponse {
     image_path: String,
     label_path: String,
@@ -303,6 +298,82 @@ struct SaveLabelsRequest {
     labels: Vec<LabelObject>,
 }
 
+/// A pre-computed, flat row ready for rendering in the tree panel.
+/// Only nodes currently visible (root level + inside expanded folders) are
+/// included.  Cloned cheaply; fields kept intentionally small.
+#[derive(Debug, Clone, PartialEq)]
+struct VisibleRow {
+    id: u32,
+    name: String,
+    kind: NodeKind,
+    /// Absolute path string – passed directly to the image viewer.
+    path: String,
+    /// Visual indent level (0 = root).
+    depth: usize,
+    /// `true` when this is a folder that contains at least one child.
+    has_children: bool,
+    /// `true` when this folder is currently expanded.
+    is_expanded: bool,
+}
+
+/// Response shape returned by `/api/tree/flat`.
+#[derive(Debug, Clone, Deserialize)]
+struct FlatIndexResponse {
+    nodes: Vec<FlatNode>,
+    #[allow(dead_code)]
+    image_count: usize,
+}
+
+/// Build a `parent_id → [child_id, …]` lookup map from the flat node list.
+/// The map is keyed by `Option<u32>` where `None` represents root-level nodes.
+fn build_children_map(nodes: &[FlatNode]) -> HashMap<Option<u32>, Vec<u32>> {
+    let mut map: HashMap<Option<u32>, Vec<u32>> = HashMap::new();
+    for node in nodes {
+        map.entry(node.parent_id).or_default().push(node.id);
+    }
+    map
+}
+
+fn collect_visible_rows(
+    parent_id: Option<u32>,
+    depth: usize,
+    nodes: &[FlatNode],
+    children_map: &HashMap<Option<u32>, Vec<u32>>,
+    expanded: &std::collections::BTreeSet<u32>,
+    result: &mut Vec<VisibleRow>,
+) {
+    let Some(children_ids) = children_map.get(&parent_id) else { return };
+    for &child_id in children_ids {
+        let Some(node) = nodes.get(child_id as usize) else { continue };
+        let is_expanded = node.kind == NodeKind::Folder && expanded.contains(&child_id);
+        let has_children = node.kind == NodeKind::Folder
+            && children_map.contains_key(&Some(child_id));
+        result.push(VisibleRow {
+            id: child_id,
+            name: node.name.clone(),
+            kind: node.kind,
+            path: node.path.clone(),
+            depth,
+            has_children,
+            is_expanded,
+        });
+        if is_expanded {
+            collect_visible_rows(Some(child_id), depth + 1, nodes, children_map, expanded, result);
+        }
+    }
+}
+
+/// Compute the ordered list of rows that should be rendered in the tree panel.
+fn compute_visible_rows(
+    nodes: &[FlatNode],
+    children_map: &HashMap<Option<u32>, Vec<u32>>,
+    expanded: &std::collections::BTreeSet<u32>,
+) -> Vec<VisibleRow> {
+    let mut result = Vec::new();
+    collect_visible_rows(None, 0, nodes, children_map, expanded, &mut result);
+    result
+}
+
 #[component]
 pub fn RootApp() -> Element {
     rsx! {
@@ -314,8 +385,8 @@ pub fn RootApp() -> Element {
 pub fn App(api_base: Option<String>) -> Element {
     let api_base = use_signal(|| api_base.unwrap_or_default());
     let app_state = use_signal(AppState::default);
-    let tree_nodes = use_signal(Vec::<TreeNode>::new);
-    let expanded_dirs = use_signal(BTreeSet::<String>::new);
+    let flat_nodes = use_signal(Vec::<FlatNode>::new);
+    let mut expanded_dirs = use_signal(std::collections::BTreeSet::<u32>::new);
     let color_map = use_signal(HashMap::<u32, (u8, u8, u8)>::new);
     let mut selected_image_path = use_signal(|| None::<String>);
     let tree_loading = use_signal(|| true);
@@ -323,7 +394,7 @@ pub fn App(api_base: Option<String>) -> Element {
 
     {
         let api_base = api_base;
-        let mut tree_nodes = tree_nodes;
+        let mut flat_nodes = flat_nodes;
         let mut tree_loading = tree_loading;
         let mut color_map = color_map;
         let app_state = app_state;
@@ -331,8 +402,8 @@ pub fn App(api_base: Option<String>) -> Element {
             let api_base_value = api_base();
             spawn(async move {
                 tree_loading.set(true);
-                match fetch_tree_root(&api_base_value).await {
-                    Ok(nodes) => tree_nodes.set(nodes),
+                match fetch_flat_index(&api_base_value).await {
+                    Ok(nodes) => flat_nodes.set(nodes),
                     Err(error) => set_status_error(app_state, error),
                 }
 
@@ -388,6 +459,16 @@ pub fn App(api_base: Option<String>) -> Element {
         });
     }
 
+    // children_map rebuilds only when flat_nodes changes; visible_rows rebuilds
+    // when nodes or expanded state changes.  Both are pure client-side, no I/O.
+    let children_map = use_memo(move || build_children_map(&flat_nodes.read()));
+    let visible_rows = use_memo(move || {
+        let nodes = flat_nodes.read();
+        let map = children_map.read();
+        let expanded = expanded_dirs.read();
+        compute_visible_rows(&nodes, &map, &expanded)
+    });
+
     let state_value = app_state();
     let visible_labels = state_value.visible_labels();
     let overlay_data_uri = render_overlay_data_uri(&state_value, &color_map(), &visible_labels);
@@ -440,42 +521,22 @@ pub fn App(api_base: Option<String>) -> Element {
                         div { class: "message info", "Loading dataset tree..." }
                     }
                     div { class: "tree-scroll",
-                        for node in tree_nodes().iter().cloned() {
-                            TreeNodeView {
-                                key: "{node.id}",
-                                node: node,
-                                level: 0,
-                                expanded_dirs: expanded_dirs(),
+                        for row in visible_rows().into_iter() {
+                            FlatNodeView {
+                                key: "{row.id}",
+                                row,
                                 selected_image_path: selected_image_path_value.clone(),
-                                ontoggle: move |node_id: String| {
-                                    let api_base = api_base;
-                                    let mut expanded_dirs = expanded_dirs;
-                                    let mut tree_nodes = tree_nodes;
-                                    let app_state = app_state;
-                                    spawn(async move {
-                                        let api_base_value = api_base();
-                                        let is_expanded = expanded_dirs().contains(&node_id);
-                                        if is_expanded {
-                                            expanded_dirs.write().remove(&node_id);
-                                            return;
-                                        }
-
-                                        expanded_dirs.write().insert(node_id.clone());
-                                        if node_needs_children(&tree_nodes(), &node_id) {
-                                            match fetch_tree_children(&api_base_value, &node_id).await {
-                                                Ok(children) => {
-                                                    tree_nodes.with_mut(|nodes| {
-                                                        replace_children(nodes, &node_id, children);
-                                                    });
-                                                }
-                                                Err(error) => set_status_error(app_state, error),
-                                            }
-                                        }
-                                    });
+                                ontoggle: move |node_id: u32| {
+                                    let mut dirs = expanded_dirs.write();
+                                    if dirs.contains(&node_id) {
+                                        dirs.remove(&node_id);
+                                    } else {
+                                        dirs.insert(node_id);
+                                    }
                                 },
                                 onselect: move |image_path: String| {
                                     selected_image_path.set(Some(image_path));
-                                }
+                                },
                             }
                         }
                     }
@@ -637,53 +698,50 @@ pub fn App(api_base: Option<String>) -> Element {
 }
 
 #[component]
-fn TreeNodeView(
-    node: TreeNode,
-    level: usize,
-    expanded_dirs: BTreeSet<String>,
+fn FlatNodeView(
+    row: VisibleRow,
     selected_image_path: Option<String>,
-    ontoggle: EventHandler<String>,
+    ontoggle: EventHandler<u32>,
     onselect: EventHandler<String>,
 ) -> Element {
-    let is_folder = node.icon == NodeIcon::Folder;
-    let is_expanded = expanded_dirs.contains(&node.id);
-    let is_selected = selected_image_path.as_deref() == Some(node.id.as_str());
-    let children_to_render = if is_folder && is_expanded {
-        node.children
-            .into_iter()
-            .filter(|child| child.icon != NodeIcon::Placeholder)
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
+    let is_selected = row.kind == NodeKind::Image
+        && selected_image_path.as_deref() == Some(row.path.as_str());
+    let row_class = if is_selected { "tree-row selected" } else { "tree-row" };
+    let indent_px = row.depth * 16;
+    let arrow = match row.kind {
+        NodeKind::Folder => {
+            if row.has_children {
+                if row.is_expanded { "▾" } else { "▸" }
+            } else {
+                "·"
+            }
+        }
+        NodeKind::Image => " ",
     };
+    let icon = match row.kind {
+        NodeKind::Folder => NodeIcon::Folder,
+        NodeKind::Image => NodeIcon::Image,
+    };
+    let node_id = row.id;
+    let path = row.path.clone();
+    let is_folder = row.kind == NodeKind::Folder;
 
     rsx! {
         div {
             class: "tree-node",
-            style: "--indent: {level * 16}px;",
+            style: "--indent: {indent_px}px;",
             button {
-                class: if is_selected { "tree-row selected" } else { "tree-row" },
+                class: row_class,
                 onclick: move |_| {
                     if is_folder {
-                        ontoggle.call(node.id.clone());
+                        ontoggle.call(node_id);
                     } else {
-                        onselect.call(node.id.clone());
+                        onselect.call(path.clone());
                     }
                 },
-                span { class: "tree-arrow", if is_folder { if is_expanded { "v" } else { ">" } } else { "-" } }
-                TreeNodeIcon { icon: node.icon }
-                span { class: "tree-label", "{node.label}" }
-            }
-            for child in children_to_render {
-                TreeNodeView {
-                    key: "{child.id}",
-                    node: child,
-                    level: level + 1,
-                    expanded_dirs: expanded_dirs.clone(),
-                    selected_image_path: selected_image_path.clone(),
-                    ontoggle: ontoggle,
-                    onselect: onselect,
-                }
+                span { class: "tree-arrow", "{arrow}" }
+                TreeNodeIcon { icon }
+                span { class: "tree-label", "{row.name}" }
             }
         }
     }
@@ -808,28 +866,6 @@ fn set_status_error(mut app_state: Signal<AppState>, message: String) {
     state.status.error_text = Some(message);
 }
 
-fn replace_children(nodes: &mut [TreeNode], node_id: &str, children: Vec<TreeNode>) -> bool {
-    for node in nodes.iter_mut() {
-        if node.id == node_id {
-            node.children = children;
-            return true;
-        }
-        if replace_children(&mut node.children, node_id, children.clone()) {
-            return true;
-        }
-    }
-    false
-}
-
-fn node_needs_children(nodes: &[TreeNode], node_id: &str) -> bool {
-    nodes.iter().any(|node| {
-        if node.id == node_id {
-            return node.children.iter().any(|child| child.id.ends_with(LAZY_PLACEHOLDER_SUFFIX));
-        }
-        node_needs_children(&node.children, node_id)
-    })
-}
-
 fn sorted_class_ids(class_map: &HashMap<u32, String>, labels: &[LabelObject]) -> Vec<u32> {
     let mut ids = class_map.keys().copied().collect::<BTreeSet<_>>();
     ids.extend(labels.iter().map(|label| label.class_id));
@@ -890,18 +926,13 @@ fn build_endpoint(api_base: &str, path: &str) -> String {
     }
 }
 
-async fn fetch_tree_root(api_base: &str) -> Result<Vec<TreeNode>, String> {
-    Ok(fetch_json::<TreeNodesResponse>(api_base, "/api/tree").await?.nodes)
-}
-
-async fn fetch_tree_children(api_base: &str, path: &str) -> Result<Vec<TreeNode>, String> {
-    let endpoint = format!("/api/tree/children?path={}", urlencoding::encode(path));
-    Ok(fetch_json::<TreeNodesResponse>(api_base, &endpoint).await?.nodes)
-}
-
 async fn fetch_labels(api_base: &str, image_path: &str) -> Result<LabelsResponse, String> {
     let endpoint = format!("/api/labels?image_path={}", urlencoding::encode(image_path));
     fetch_json(api_base, &endpoint).await
+}
+
+async fn fetch_flat_index(api_base: &str) -> Result<Vec<FlatNode>, String> {
+    Ok(fetch_json::<FlatIndexResponse>(api_base, "/api/tree/flat").await?.nodes)
 }
 
 async fn fetch_class_map(api_base: &str) -> Result<HashMap<u32, String>, String> {
