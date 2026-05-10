@@ -8,19 +8,19 @@ authors.workspace = true
 [features]
 default = []
 server = [
-	"dioxus/server",
-	"dep:axum",
-	"dep:dioxus-cli-config",
-	"dep:dioxus-server",
-	"dep:tokio",
-	"dep:tower-http",
-	"dep:tracing",
-	"dep:tracing-subscriber",
-	"dep:urlencoding",
-	"dep:yoda-app",
-	"dep:yoda-config",
-	"dep:yoda-core",
-	"dep:yoda-data",
+    "dioxus/server",
+    "dep:axum",
+    "dep:dioxus-cli-config",
+    "dep:dioxus-server",
+    "dep:tokio",
+    "dep:tower-http",
+    "dep:tracing",
+    "dep:tracing-subscriber",
+    "dep:urlencoding",
+    "dep:yoda-app",
+    "dep:yoda-config",
+    "dep:yoda-core",
+    "dep:yoda-data",
 ]
 web = ["dioxus/web"]
 

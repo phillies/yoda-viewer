@@ -23,12 +23,12 @@ RUN cargo build --release -p yoda-web --features server
 RUN mkdir -p /app/yoda-web-release && \
     cp /app/target/release/yoda-web /app/yoda-web-release/ && \
     if [ -d /app/target/dx/yoda-web/release/web/public ]; then \
-        cp -r /app/target/dx/yoda-web/release/web/public /app/yoda-web-release/public; \
+    cp -r /app/target/dx/yoda-web/release/web/public /app/yoda-web-release/public; \
     elif [ -d /app/dist/public ]; then \
-        cp -r /app/dist/public /app/yoda-web-release/public; \
+    cp -r /app/dist/public /app/yoda-web-release/public; \
     else \
-        echo "ERROR: could not find built Dioxus public assets" && \
-        exit 1; \
+    echo "ERROR: could not find built Dioxus public assets" && \
+    exit 1; \
     fi
 
 FROM debian:trixie-slim AS runtime
