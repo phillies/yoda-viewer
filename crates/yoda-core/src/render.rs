@@ -159,7 +159,7 @@ fn render_text_label(
     }
 
     let text = text_parts.join(" ");
-    let text_width = (text.len().max(20) as u32 * 6 + 8) as f32;
+    let text_width = text.chars().count() as f32 * 6.5 + 10.0;
     let text_height = 16.0_f32;
     let x = label.pixel_bbox.x;
     let y = label.pixel_bbox.y;

@@ -8,6 +8,8 @@ authors.workspace = true
 [dependencies]
 axum.workspace = true
 dioxus = { workspace = true, features = ["desktop"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
 yoda-config = { path = "../yoda-config" }
 yoda-ui = { path = "../yoda-ui" }
 yoda-web = { path = "../yoda-web", features = ["server"] }

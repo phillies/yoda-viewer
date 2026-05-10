@@ -8,6 +8,131 @@ use yoda_app::{apply_action, AccessMode, AppAction, AppEffect, AppState, LoadedI
 use yoda_core::{render_labels_to_svg, LabelObject, RenderOptions};
 use yoda_data::{NodeIcon, TreeNode, LAZY_PLACEHOLDER_SUFFIX};
 
+const PAN_ZOOM_SCRIPT: &str = r#"
+(function () {
+    if (window.__yodaPanZoomInitialized) {
+        return;
+    }
+    window.__yodaPanZoomInitialized = true;
+
+    const container = document.querySelector('[data-panzoom-container="true"]');
+    if (!container) {
+        return;
+    }
+
+    let stage = null;
+    let zoom = 1;
+    let panX = 0;
+    let panY = 0;
+    let dragging = false;
+    let lastX = 0;
+    let lastY = 0;
+    let imageKey = "";
+
+    function clamp(value, min, max) {
+        return Math.min(max, Math.max(min, value));
+    }
+
+    function updateStage() {
+        stage = container.querySelector('[data-panzoom-stage="true"]');
+        if (!stage) {
+            container.style.cursor = 'default';
+            return false;
+        }
+
+        const nextKey = stage.getAttribute('data-image-key') || '';
+        if (nextKey !== imageKey) {
+            imageKey = nextKey;
+            zoom = 1;
+            panX = 0;
+            panY = 0;
+        }
+
+        return true;
+    }
+
+    function applyTransform() {
+        if (!stage && !updateStage()) {
+            return;
+        }
+
+        stage.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+        container.dataset.zoom = zoom.toFixed(2);
+        container.style.cursor = dragging ? 'grabbing' : 'grab';
+    }
+
+    function stopDragging() {
+        dragging = false;
+        container.style.cursor = stage ? 'grab' : 'default';
+    }
+
+    updateStage();
+    applyTransform();
+
+    const observer = new MutationObserver(function () {
+        updateStage();
+        applyTransform();
+    });
+    observer.observe(container, { childList: true, subtree: true });
+
+    container.addEventListener('wheel', function (event) {
+        if (!updateStage()) {
+            return;
+        }
+
+        event.preventDefault();
+        const rect = container.getBoundingClientRect();
+        const pointerX = event.clientX - rect.left;
+        const pointerY = event.clientY - rect.top;
+        const nextZoom = clamp(zoom * (event.deltaY < 0 ? 1.1 : 0.9), 0.25, 6.0);
+        const ratio = nextZoom / zoom;
+
+        panX = pointerX - (pointerX - panX) * ratio;
+        panY = pointerY - (pointerY - panY) * ratio;
+        zoom = nextZoom;
+        applyTransform();
+    }, { passive: false });
+
+    container.addEventListener('mousedown', function (event) {
+        if (event.button !== 0 || !updateStage()) {
+            return;
+        }
+
+        dragging = true;
+        lastX = event.clientX;
+        lastY = event.clientY;
+        applyTransform();
+        event.preventDefault();
+    });
+
+    window.addEventListener('mousemove', function (event) {
+        if (!dragging || !stage) {
+            return;
+        }
+
+        panX += event.clientX - lastX;
+        panY += event.clientY - lastY;
+        lastX = event.clientX;
+        lastY = event.clientY;
+        applyTransform();
+    });
+
+    window.addEventListener('mouseup', stopDragging);
+    window.addEventListener('mouseleave', stopDragging);
+
+    container.addEventListener('dblclick', function () {
+        if (!updateStage()) {
+            return;
+        }
+
+        zoom = 1;
+        panX = 0;
+        panY = 0;
+        applyTransform();
+    });
+})();
+"#;
+
 const APP_CSS: &str = r#"
 :root {
     color-scheme: dark;
@@ -38,7 +163,7 @@ button, select { font: inherit; }
 .tree-row:hover { background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.04); }
 .tree-row.selected { background: var(--accent-soft); border-color: rgba(226, 93, 63, 0.35); }
 .tree-arrow { width: 14px; text-align: center; color: var(--muted); }
-.tree-icon { width: 18px; color: var(--muted); }
+.tree-icon { width: 18px; height: 18px; color: var(--muted); flex: none; }
 .tree-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .content { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--line); background: rgba(17, 22, 28, 0.75); backdrop-filter: blur(10px); }
@@ -49,8 +174,9 @@ button, select { font: inherit; }
 .status-pill { padding: 8px 12px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line); background: rgba(255,255,255,0.03); }
 .status-pill.locked { color: var(--warn); }
 .status-pill.unlocked { color: var(--good); }
-.viewport-wrap { flex: 1; min-height: 0; padding: 18px; overflow: auto; }
+.viewport-wrap { flex: 1; min-height: 0; padding: 18px; overflow: hidden; }
 .viewport { min-height: 100%; border: 1px solid var(--line); border-radius: 22px; background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01)); display: flex; align-items: center; justify-content: center; padding: 18px; position: relative; }
+.canvas-stage { transform-origin: top left; will-change: transform; }
 .canvas { position: relative; display: inline-block; line-height: 0; max-width: 100%; }
 .canvas img.main-image { display: block; max-width: min(100%, 1100px); max-height: calc(100vh - 220px); border-radius: 18px; box-shadow: 0 30px 80px rgba(0,0,0,0.45); }
 .canvas img.overlay-image { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
@@ -202,6 +328,11 @@ pub fn App(api_base: Option<String>) -> Element {
         .current_image_path
         .as_ref()
         .map(|path| build_image_url(&api_base(), &path.to_string_lossy()));
+    let image_stage_key = state_value
+        .current_image_path
+        .as_ref()
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_else(|| String::from("no-image"));
     let selected_image_path_value = selected_image_path();
     let class_ids = sorted_class_ids(&state_value.class_map, &visible_labels);
     let class_options = class_ids
@@ -233,6 +364,7 @@ pub fn App(api_base: Option<String>) -> Element {
 
     rsx! {
         document::Style { "{APP_CSS}" }
+        script { "{PAN_ZOOM_SCRIPT}" }
         main { class: "app-shell",
             aside { class: "panel",
                 div { class: "panel-inner",
@@ -343,12 +475,14 @@ pub fn App(api_base: Option<String>) -> Element {
                 }
 
                 div { class: "viewport-wrap",
-                    div { class: "viewport",
+                    div { class: "viewport", "data-panzoom-container": "true",
                         if let Some(image_src) = selected_image_src {
-                            div { class: "canvas",
-                                img { class: "main-image", src: image_src, alt: "Selected dataset image" }
-                                if let Some(overlay_src) = overlay_data_uri {
-                                    img { class: "overlay-image", src: overlay_src, alt: "Label overlay" }
+                            div { class: "canvas-stage", "data-panzoom-stage": "true", "data-image-key": image_stage_key,
+                                div { class: "canvas",
+                                    img { class: "main-image", src: image_src, alt: "Selected dataset image" }
+                                    if let Some(overlay_src) = overlay_data_uri {
+                                        img { class: "overlay-image", src: overlay_src, alt: "Label overlay" }
+                                    }
                                 }
                             }
                         } else {
@@ -470,7 +604,7 @@ fn TreeNodeView(
                     }
                 },
                 span { class: "tree-arrow", if is_folder { if is_expanded { "v" } else { ">" } } else { "-" } }
-                span { class: "tree-icon", if is_folder { "DIR" } else { "IMG" } }
+                TreeNodeIcon { icon: node.icon }
                 span { class: "tree-label", "{node.label}" }
             }
             for child in children_to_render {
@@ -674,6 +808,15 @@ fn build_image_url(api_base: &str, image_path: &str) -> String {
 
 fn build_endpoint(api_base: &str, path: &str) -> String {
     if api_base.is_empty() {
+        #[cfg(target_arch = "wasm32")]
+        {
+            if let Some(window) = web_sys::window() {
+                if let Ok(origin) = window.location().origin() {
+                    return format!("{origin}{path}");
+                }
+            }
+        }
+
         path.to_string()
     } else {
         format!("{api_base}{path}")
@@ -745,4 +888,46 @@ where
     }
 
     response.json::<T>().await.map_err(|error| error.to_string())
+}
+
+#[component]
+fn TreeNodeIcon(icon: NodeIcon) -> Element {
+    match icon {
+        NodeIcon::Folder => rsx! {
+            svg {
+                class: "tree-icon",
+                "viewBox": "0 0 24 24",
+                fill: "none",
+                stroke: "currentColor",
+                stroke_width: "1.8",
+                stroke_linecap: "round",
+                stroke_linejoin: "round",
+                path { d: "M3 7.5a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" }
+            }
+        },
+        NodeIcon::Image => rsx! {
+            svg {
+                class: "tree-icon",
+                "viewBox": "0 0 24 24",
+                fill: "none",
+                stroke: "currentColor",
+                stroke_width: "1.8",
+                stroke_linecap: "round",
+                stroke_linejoin: "round",
+                rect { x: "4", y: "5", width: "16", height: "14", rx: "2" }
+                circle { cx: "9", cy: "10", r: "1.5" }
+                path { d: "m20 16-4.5-4.5L8 19" }
+            }
+        },
+        NodeIcon::Placeholder => rsx! {
+            svg {
+                class: "tree-icon",
+                "viewBox": "0 0 24 24",
+                fill: "currentColor",
+                circle { cx: "6", cy: "12", r: "1.3" }
+                circle { cx: "12", cy: "12", r: "1.3" }
+                circle { cx: "18", cy: "12", r: "1.3" }
+            }
+        },
+    }
 }

@@ -11,6 +11,7 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 urlencoding.workspace = true
+web-sys.workspace = true
 yoda-app = { path = "../yoda-app" }
 yoda-core = { path = "../yoda-core" }
 yoda-data = { path = "../yoda-data" }

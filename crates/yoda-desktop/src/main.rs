@@ -2,6 +2,7 @@ use std::net::TcpListener;
 use std::sync::OnceLock;
 
 use dioxus::prelude::*;
+use tracing_subscriber::EnvFilter;
 use yoda_config::YoDaSettings;
 use yoda_ui::App;
 use yoda_web::build_router;
@@ -25,6 +26,11 @@ fn desktop_app() -> Element {
 }
 
 fn main() {
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .try_init();
+
     let mut settings = YoDaSettings::from_env().unwrap_or_default();
     let host = settings
         .host
@@ -38,6 +44,15 @@ fn main() {
     let server_host = host.clone();
     let api_base = format!("http://{host}:{port}");
     let _ = DESKTOP_API_BASE.set(api_base.clone());
+
+    tracing::info!(
+        host = %host,
+        port,
+        api_base = %api_base,
+        image_root = %settings.image_base_path.display(),
+        label_root = %settings.label_base_path.display(),
+        "starting yoda-desktop backend"
+    );
 
     std::thread::spawn(move || {
         let runtime = tokio::runtime::Builder::new_multi_thread()
