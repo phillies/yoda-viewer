@@ -7013,6 +7013,7 @@ dependencies = [
 name = "yoda-desktop"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "axum",
  "dioxus",
  "tokio",
@@ -7042,6 +7043,7 @@ dependencies = [
 name = "yoda-web"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "axum",
  "dioxus",
  "dioxus-cli-config",

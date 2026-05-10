@@ -5,6 +5,8 @@ use std::net::TcpListener;
 #[cfg(feature = "server")]
 use std::path::Path;
 #[cfg(feature = "server")]
+use anyhow::Context;
+#[cfg(feature = "server")]
 use yoda_config::YoDaSettings;
 #[cfg(feature = "server")]
 use yoda_web::build_router;
@@ -12,6 +14,14 @@ use yoda_web::build_router;
 #[cfg(feature = "server")]
 #[tokio::main]
 async fn main() {
+    if let Err(error) = run_server().await {
+        tracing::error!(error = %error, "yoda-web failed to start");
+        std::process::exit(1);
+    }
+}
+
+#[cfg(feature = "server")]
+async fn run_server() -> anyhow::Result<()> {
     use tracing_subscriber::EnvFilter;
 
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
@@ -29,7 +39,7 @@ async fn main() {
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(cli_address.port());
-    let port = choose_port(&host, requested_port);
+    let port = choose_port(&host, requested_port)?;
     settings.host = Some(host.clone());
     settings.port = port;
     if port != requested_port {
@@ -49,18 +59,17 @@ async fn main() {
         color_map = %display_optional_path(settings.color_map.as_deref()),
         "starting yoda-web server"
     );
-    let address = std::net::SocketAddr::new(
-        host.parse().expect("parse YODA_HOST as IP address"),
-        port,
-    );
-    let router = build_router(settings).expect("build yoda-web router");
-    let listener = tokio::net::TcpListener::bind(address)
+    let router = build_router(settings)
+        .map_err(|error| anyhow::anyhow!("build yoda-web router: {error:?}"))?;
+    let listener = tokio::net::TcpListener::bind((host.as_str(), port))
         .await
-        .expect("bind yoda-web listener");
+        .with_context(|| format!("bind yoda-web listener on {host}:{port}"))?;
 
     axum::serve(listener, router.into_make_service())
         .await
-        .expect("run yoda-web server");
+        .context("run yoda-web server")?;
+
+    Ok(())
 }
 
 #[cfg(feature = "server")]
@@ -70,18 +79,22 @@ fn display_optional_path(path: Option<&Path>) -> String {
 }
 
 #[cfg(feature = "server")]
-fn choose_port(host: &str, requested_port: u16) -> u16 {
-    if dioxus_cli_config::is_cli_enabled() || std::env::var("YODA_PORT").is_ok() {
-        return requested_port;
+fn choose_port(host: &str, requested_port: u16) -> anyhow::Result<u16> {
+    if std::env::var("YODA_PORT").is_ok() {
+        return Ok(requested_port);
     }
 
     for port in requested_port..requested_port.saturating_add(20) {
         if TcpListener::bind((host, port)).is_ok() {
-            return port;
+            return Ok(port);
         }
     }
 
-    requested_port
+    anyhow::bail!(
+        "no available port found for host {host} in range {}..{}",
+        requested_port,
+        requested_port.saturating_add(20)
+    )
 }
 
 #[cfg(not(feature = "server"))]

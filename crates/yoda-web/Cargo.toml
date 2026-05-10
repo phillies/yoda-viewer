@@ -25,6 +25,7 @@ server = [
 web = ["dioxus/web"]
 
 [dependencies]
+anyhow.workspace = true
 axum = { workspace = true, optional = true }
 dioxus = { workspace = true, features = ["fullstack"] }
 dioxus-cli-config = { workspace = true, optional = true }

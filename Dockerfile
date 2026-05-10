@@ -8,7 +8,7 @@ COPY . .
 RUN apt-get update && apt-get install -y build-essential pkg-config libssl-dev
 
 # Install Dioxus CLI for building frontend assets
-RUN cargo install dioxus-cli --locked
+RUN cargo install dioxus-cli --version 0.7.2 --locked
 
 # Build frontend assets (WASM + JS bundles)
 # This produces the public/ directory with Dioxus client-side bundle

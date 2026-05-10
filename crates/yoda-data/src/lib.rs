@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -44,7 +45,7 @@ pub struct FlatNode {
     pub parent_id: Option<u32>,
     pub name: String,
     pub kind: NodeKind,
-    /// Absolute filesystem path as a UTF-8 string.
+    /// Dataset-relative path as a UTF-8 string (using `/` separators).
     pub path: String,
 }
 
@@ -54,7 +55,7 @@ pub struct FlatNode {
 /// Reconstruct the parent→children mapping with [`build_children_map`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FlatIndex {
-    pub nodes: Vec<FlatNode>,
+    pub nodes: Arc<[FlatNode]>,
     pub image_count: usize,
 }
 
@@ -279,12 +280,16 @@ pub fn scan_dataset_tree(root: &Path) -> FlatIndex {
     let mut nodes: Vec<FlatNode> = Vec::new();
     let mut image_count: usize = 0;
     if root.is_dir() {
-        scan_dir_flat(root, None, &mut nodes, &mut image_count);
+        scan_dir_flat(root, root, None, &mut nodes, &mut image_count);
     }
-    FlatIndex { nodes, image_count }
+    FlatIndex {
+        nodes: nodes.into(),
+        image_count,
+    }
 }
 
 fn scan_dir_flat(
+    root: &Path,
     path: &Path,
     parent_id: Option<u32>,
     nodes: &mut Vec<FlatNode>,
@@ -327,9 +332,9 @@ fn scan_dir_flat(
                 parent_id,
                 name,
                 kind: NodeKind::Folder,
-                path: entry_path.to_string_lossy().into_owned(),
+                path: dataset_relative_path(root, &entry_path),
             });
-            scan_dir_flat(&entry_path, Some(id), nodes, image_count);
+            scan_dir_flat(root, &entry_path, Some(id), nodes, image_count);
         } else {
             let ext = entry_path
                 .extension()
@@ -343,7 +348,7 @@ fn scan_dir_flat(
                     parent_id,
                     name,
                     kind: NodeKind::Image,
-                    path: entry_path.to_string_lossy().into_owned(),
+                    path: dataset_relative_path(root, &entry_path),
                 });
                 *image_count += 1;
             }
@@ -351,7 +356,18 @@ fn scan_dir_flat(
     }
 }
 
-#[cfg(test)]
+fn dataset_relative_path(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(value) => Some(value.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 #[cfg(test)]
 mod scan_tests {
     use std::fs;

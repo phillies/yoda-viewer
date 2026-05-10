@@ -4,7 +4,7 @@ YOLO Dataset viewer — review and edit Ultralytics YOLO segmentation & bounding
 ## Build & Run
 
 ### Requirements
-- Rust 1.80+
+- Rust 1.85+
 - `dx` CLI (Dioxus): `cargo install dioxus-cli`
 
 ### Web App

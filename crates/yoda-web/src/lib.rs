@@ -191,7 +191,7 @@ pub struct TreeStatusResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlatIndexResponse {
-    pub nodes: Vec<FlatNode>,
+    pub nodes: Arc<[FlatNode]>,
     pub image_count: usize,
 }
 
@@ -404,7 +404,7 @@ async fn tree_flat(
     Extension(state): Extension<Arc<BackendState>>,
 ) -> Json<FlatIndexResponse> {
     Json(FlatIndexResponse {
-        nodes: state.flat_index.nodes.clone(),
+        nodes: Arc::clone(&state.flat_index.nodes),
         image_count: state.flat_index.image_count,
     })
 }
@@ -430,6 +430,12 @@ async fn image_bytes(
     Query(query): Query<ImagePathQuery>,
 ) -> Result<Response, ApiError> {
     let image_path = resolve_path(&state.image_root, &query.image_path)?;
+    if !is_image_path(&image_path) {
+        return Err(ApiError::bad_request(format!(
+            "unsupported image extension: {}",
+            image_path.display()
+        )));
+    }
     ensure_file(&image_path)?;
     tracing::info!(image_path = %image_path.display(), "serving image bytes");
     let bytes = state.repository.image_bytes(&image_path)?;
