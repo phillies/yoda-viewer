@@ -1,0 +1,52 @@
+[package]
+name = "yoda-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[features]
+default = []
+server = [
+    "dioxus/server",
+    "dep:axum",
+    "dep:dioxus-cli-config",
+    "dep:dioxus-server",
+    "dep:tokio",
+    "dep:tower-http",
+    "dep:tracing",
+    "dep:tracing-subscriber",
+    "dep:urlencoding",
+    "dep:yoda-app",
+    "dep:yoda-config",
+    "dep:yoda-core",
+    "dep:yoda-data",
+]
+web = ["dioxus/web"]
+
+[dependencies]
+anyhow.workspace = true
+axum = { workspace = true, optional = true }
+dioxus = { workspace = true, features = ["fullstack"] }
+dioxus-cli-config = { workspace = true, optional = true }
+dioxus-server = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, optional = true }
+tower-http = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, optional = true }
+urlencoding = { workspace = true, optional = true }
+yoda-app = { path = "../yoda-app", optional = true }
+yoda-config = { path = "../yoda-config", optional = true }
+yoda-core = { path = "../yoda-core", optional = true }
+yoda-data = { path = "../yoda-data", optional = true }
+yoda-ui = { path = "../yoda-ui" }
+
+[dev-dependencies]
+image.workspace = true
+tempfile.workspace = true
+tower = { version = "0.5", features = ["util"] }
+
+[lints]
+workspace = true

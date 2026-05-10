@@ -1,0 +1,16 @@
+[application]
+name = "yoda"
+default_platform = "web"
+out_dir = "dist"
+asset_dir = "public"
+
+[web.app]
+title = "YoDa Rust"
+base_path = "/"
+
+[web.watcher]
+reload_html = true
+watch_path = ["crates", "public"]
+index_on_404 = true
+
+[web.resource.dev]

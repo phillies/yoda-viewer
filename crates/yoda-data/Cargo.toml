@@ -1,0 +1,19 @@
+[package]
+name = "yoda-data"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+image.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+yoda-config = { path = "../yoda-config" }
+yoda-core = { path = "../yoda-core" }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
