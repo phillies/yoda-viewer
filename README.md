@@ -1,16 +1,22 @@
 # YoDa Viewer
 YOLO Dataset viewer — review and edit Ultralytics YOLO segmentation & bounding-box labels in your browser.
 
-## Installation
-```bash
-uv pip install .
-```
+## Build & Run
 
-## Run
+### Requirements
+- Rust 1.80+
+- `dx` CLI (Dioxus): `cargo install dioxus-cli`
+
+### Web App
 ```bash
-yoda
+cargo run -p yoda-web --features server
 ```
 The server starts on port **8080** by default. If that port is in use it automatically increments until a free port is found.
+
+### Desktop App
+```bash
+cargo run -p yoda-desktop
+```
 
 ### Configuration
 All settings are read from environment variables (or a `.env` file):
@@ -21,8 +27,8 @@ All settings are read from environment variables (or a `.env` file):
 | `YODA_LABEL_BASE_PATH` | Root folder that contains the YOLO `.txt` label files (must mirror the image folder structure) | (required) |
 | `YODA_CLASS_INFO_YAML` | Path to dataset YAML with class names (Ultralytics format, `names:` key) | — |
 | `YODA_COLOR_MAP_YAML` | Path to a color-map YAML (`class_id: "#RRGGBB"`) | — |
-| `YODA_HOST` | Host for the uvicorn server | `0.0.0.0` |
-| `YODA_PORT` | Port for the uvicorn server | `8080` |
+| `YODA_HOST` | Host for the web server | `127.0.0.1` |
+| `YODA_PORT` | Port for the web server | `8080` |
 
 ## Features
 
@@ -48,98 +54,71 @@ All settings are read from environment variables (or a `.env` file):
 - **Hide / show by class**: use the class-legend checkboxes.
 - **Hide / show individual objects**: use the eye-icon buttons in the object list.
 
-## Rust Rewrite
+## Workspace
 
-The Rust implementation lives alongside the current Python application during migration. The Python app remains the behavioral reference until the Rust workspace reaches explicit parity checkpoints.
+- **crates/yoda-core**: labels, geometry, and shared domain types
+- **crates/yoda-config**: dataset YAML and runtime configuration
+- **crates/yoda-data**: filesystem-backed repository layer and dataset tree indexing
+- **crates/yoda-app**: app state and action orchestration
+- **crates/yoda-ui**: shared Dioxus components
+- **crates/yoda-web**: Axum plus Dioxus fullstack entrypoint
+- **crates/yoda-desktop**: Dioxus desktop entrypoint
 
-### Workspace
-
-- crates/yoda-core: labels, geometry, and shared domain types
-- crates/yoda-config: dataset YAML and runtime configuration
-- crates/yoda-data: filesystem-backed repository layer
-- crates/yoda-app: app state and action orchestration
-- crates/yoda-ui: shared Dioxus components
-- crates/yoda-web: Axum plus Dioxus fullstack entrypoint
-- crates/yoda-desktop: Dioxus desktop entrypoint
-
-### Rust commands
+## Development
 
 ```bash
+# Format
 cargo fmt --all
+
+# Lint
 cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+# Test
 cargo test --workspace
-pwsh ./scripts/rust-dev.ps1 serve-desktop
+
+# Serve web app (requires dx CLI)
 pwsh ./scripts/rust-dev.ps1 serve-web
-```
-
-`dx` is required for the serve commands. If it is not installed locally yet, install the Dioxus CLI first and then rerun the script.
-
-### Run examples (Windows and Linux)
-
-The Rust apps read dataset settings from environment variables. The examples below set image/label folders plus class and color maps explicitly.
-
-#### Windows (PowerShell)
-
-Web app:
-
-```powershell
-$env:YODA_IMAGE_BASE_PATH = "example_data/images"
-$env:YODA_LABEL_BASE_PATH = "labels"
-$env:YODA_CLASS_INFO_YAML = "example_data/carparts-seg.yaml"
-$env:YODA_COLOR_MAP_YAML = "example/color_map.yaml"
-$env:YODA_HOST = "127.0.0.1"
-$env:YODA_PORT = "8080"
-cargo run -p yoda-web --features server
-```
-
-Desktop app:
-
-```powershell
-$env:YODA_IMAGE_BASE_PATH = "example_data/images"
-$env:YODA_LABEL_BASE_PATH = "labels"
-$env:YODA_CLASS_INFO_YAML = "example_data/carparts-seg.yaml"
-$env:YODA_COLOR_MAP_YAML = "example/color_map.yaml"
-$env:YODA_HOST = "127.0.0.1"
-$env:YODA_PORT = "8080"
-cargo run -p yoda-desktop
-```
-
-You can also use the helper script on Windows when `dx` is installed:
-
-```powershell
-pwsh ./scripts/rust-dev.ps1 serve-web
-pwsh ./scripts/rust-dev.ps1 serve-desktop
-```
-
-#### Linux/macOS (bash)
-
-Web app:
-
-```bash
-export YODA_IMAGE_BASE_PATH="example_data/images"
-export YODA_LABEL_BASE_PATH="labels"
-export YODA_CLASS_INFO_YAML="example_data/carparts-seg.yaml"
-export YODA_COLOR_MAP_YAML="example/color_map.yaml"
-export YODA_HOST="127.0.0.1"
-export YODA_PORT="8080"
-cargo run -p yoda-web --features server
-```
-
-Desktop app:
-
-```bash
-export YODA_IMAGE_BASE_PATH="example_data/images"
-export YODA_LABEL_BASE_PATH="labels"
-export YODA_CLASS_INFO_YAML="example_data/carparts-seg.yaml"
-export YODA_COLOR_MAP_YAML="example/color_map.yaml"
-export YODA_HOST="127.0.0.1"
-export YODA_PORT="8080"
-cargo run -p yoda-desktop
-```
-
-With bash on Linux/macOS, use `dx` directly:
-
-```bash
 dx serve --package yoda-web --platform web
+
+# Serve desktop app (requires dx CLI)
+pwsh ./scripts/rust-dev.ps1 serve-desktop
 dx serve --package yoda-desktop --platform desktop
+```
+
+Install the Dioxus CLI if not already present:
+```bash
+cargo install dioxus-cli
+```
+
+## Example Usage
+
+Set the required dataset environment variables and run:
+
+**Web app:**
+```bash
+export YODA_IMAGE_BASE_PATH="example_data/images"
+export YODA_LABEL_BASE_PATH="labels"
+export YODA_CLASS_INFO_YAML="example_data/carparts-seg.yaml"
+export YODA_COLOR_MAP_YAML="example/color_map.yaml"
+cargo run -p yoda-web --features server
+```
+
+**Desktop app:**
+```bash
+export YODA_IMAGE_BASE_PATH="example_data/images"
+export YODA_LABEL_BASE_PATH="labels"
+export YODA_CLASS_INFO_YAML="example_data/carparts-seg.yaml"
+export YODA_COLOR_MAP_YAML="example/color_map.yaml"
+cargo run -p yoda-desktop
+```
+
+On Windows (PowerShell):
+```powershell
+$env:YODA_IMAGE_BASE_PATH = "example_data/images"
+$env:YODA_LABEL_BASE_PATH = "labels"
+$env:YODA_CLASS_INFO_YAML = "example_data/carparts-seg.yaml"
+$env:YODA_COLOR_MAP_YAML = "example/color_map.yaml"
+cargo run -p yoda-web --features server
+# or
+cargo run -p yoda-desktop
 ```

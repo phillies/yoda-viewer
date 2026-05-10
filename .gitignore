@@ -11,6 +11,8 @@ wheels/
 
 example_data/
 target/
+
+# Dioxus development server
 .dx/
 dist/
 node_modules/

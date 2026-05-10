@@ -1,0 +1,9 @@
+target
+**/target
+.git
+.github
+.dx
+node_modules
+.DS_Store
+.idea
+.vscode
