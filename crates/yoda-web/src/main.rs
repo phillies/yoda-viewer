@@ -1,6 +1,8 @@
 #![allow(non_snake_case)]
 
 #[cfg(feature = "server")]
+use std::net::TcpListener;
+#[cfg(feature = "server")]
 use std::path::Path;
 #[cfg(feature = "server")]
 use yoda_config::YoDaSettings;
@@ -23,12 +25,21 @@ async fn main() {
         .host
         .clone()
         .unwrap_or_else(|| cli_address.ip().to_string());
-    let port = std::env::var("YODA_PORT")
+    let requested_port = std::env::var("YODA_PORT")
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(cli_address.port());
+    let port = choose_port(&host, requested_port);
     settings.host = Some(host.clone());
     settings.port = port;
+    if port != requested_port {
+        tracing::warn!(
+            host = %host,
+            requested_port,
+            selected_port = port,
+            "requested yoda-web port was busy; using next available port"
+        );
+    }
     tracing::info!(
         host = %host,
         port,
@@ -56,6 +67,21 @@ async fn main() {
 fn display_optional_path(path: Option<&Path>) -> String {
     path.map(|path| path.display().to_string())
         .unwrap_or_else(|| String::from("<none>"))
+}
+
+#[cfg(feature = "server")]
+fn choose_port(host: &str, requested_port: u16) -> u16 {
+    if dioxus_cli_config::is_cli_enabled() || std::env::var("YODA_PORT").is_ok() {
+        return requested_port;
+    }
+
+    for port in requested_port..requested_port.saturating_add(20) {
+        if TcpListener::bind((host, port)).is_ok() {
+            return port;
+        }
+    }
+
+    requested_port
 }
 
 #[cfg(not(feature = "server"))]

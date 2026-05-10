@@ -8,128 +8,195 @@ use yoda_app::{apply_action, AccessMode, AppAction, AppEffect, AppState, LoadedI
 use yoda_core::{render_labels_to_svg, LabelObject, RenderOptions};
 use yoda_data::{NodeIcon, TreeNode, LAZY_PLACEHOLDER_SUFFIX};
 
-const PAN_ZOOM_SCRIPT: &str = r#"
+pub const PAN_ZOOM_SCRIPT: &str = r#"
 (function () {
-    if (window.__yodaPanZoomInitialized) {
-        return;
-    }
-    window.__yodaPanZoomInitialized = true;
-
-    const container = document.querySelector('[data-panzoom-container="true"]');
-    if (!container) {
+    if (window.__yodaPanZoomController) {
         return;
     }
 
-    let stage = null;
-    let zoom = 1;
-    let panX = 0;
-    let panY = 0;
-    let dragging = false;
-    let lastX = 0;
-    let lastY = 0;
-    let imageKey = "";
+    const controller = {
+        container: null,
+        stage: null,
+        zoom: 1,
+        panX: 0,
+        panY: 0,
+        dragging: false,
+        lastX: 0,
+        lastY: 0,
+        imageKey: "",
+        containerObserver: null,
+        documentObserver: null,
+        cleanup: null,
+    };
+    window.__yodaPanZoomController = controller;
 
     function clamp(value, min, max) {
         return Math.min(max, Math.max(min, value));
     }
 
     function updateStage() {
-        stage = container.querySelector('[data-panzoom-stage="true"]');
-        if (!stage) {
-            container.style.cursor = 'default';
+        if (!controller.container || !document.contains(controller.container)) {
+            controller.stage = null;
             return false;
         }
 
-        const nextKey = stage.getAttribute('data-image-key') || '';
-        if (nextKey !== imageKey) {
-            imageKey = nextKey;
-            zoom = 1;
-            panX = 0;
-            panY = 0;
+        controller.stage = controller.container.querySelector('[data-panzoom-stage="true"]');
+        if (!controller.stage) {
+            controller.container.style.cursor = 'default';
+            return false;
+        }
+
+        const nextKey = controller.stage.getAttribute('data-image-key') || '';
+        if (nextKey !== controller.imageKey) {
+            controller.imageKey = nextKey;
+            controller.zoom = 1;
+            controller.panX = 0;
+            controller.panY = 0;
         }
 
         return true;
     }
 
     function applyTransform() {
-        if (!stage && !updateStage()) {
+        if (!controller.stage && !updateStage()) {
             return;
         }
 
-        stage.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
-        container.dataset.zoom = zoom.toFixed(2);
-        container.style.cursor = dragging ? 'grabbing' : 'grab';
+        controller.stage.style.transform = `translate(${controller.panX}px, ${controller.panY}px) scale(${controller.zoom})`;
+        controller.container.dataset.zoom = controller.zoom.toFixed(2);
+        controller.container.style.cursor = controller.dragging ? 'grabbing' : 'grab';
     }
 
     function stopDragging() {
-        dragging = false;
-        container.style.cursor = stage ? 'grab' : 'default';
+        controller.dragging = false;
+        if (controller.container) {
+            controller.container.style.cursor = controller.stage ? 'grab' : 'default';
+        }
     }
 
-    updateStage();
-    applyTransform();
+    function resetView() {
+        controller.zoom = 1;
+        controller.panX = 0;
+        controller.panY = 0;
+        applyTransform();
+    }
 
-    const observer = new MutationObserver(function () {
+    function handleContainerMutations() {
         updateStage();
         applyTransform();
-    });
-    observer.observe(container, { childList: true, subtree: true });
+    }
 
-    container.addEventListener('wheel', function (event) {
-        if (!updateStage()) {
+    function bindContainer(container) {
+        if (controller.container === container) {
+            handleContainerMutations();
             return;
         }
 
-        event.preventDefault();
-        const rect = container.getBoundingClientRect();
-        const pointerX = event.clientX - rect.left;
-        const pointerY = event.clientY - rect.top;
-        const nextZoom = clamp(zoom * (event.deltaY < 0 ? 1.1 : 0.9), 0.25, 6.0);
-        const ratio = nextZoom / zoom;
-
-        panX = pointerX - (pointerX - panX) * ratio;
-        panY = pointerY - (pointerY - panY) * ratio;
-        zoom = nextZoom;
-        applyTransform();
-    }, { passive: false });
-
-    container.addEventListener('mousedown', function (event) {
-        if (event.button !== 0 || !updateStage()) {
-            return;
+        if (controller.cleanup) {
+            controller.cleanup();
+            controller.cleanup = null;
         }
 
-        dragging = true;
-        lastX = event.clientX;
-        lastY = event.clientY;
-        applyTransform();
-        event.preventDefault();
-    });
+        controller.container = container;
+        controller.stage = null;
+        controller.imageKey = '';
+        stopDragging();
 
-    window.addEventListener('mousemove', function (event) {
-        if (!dragging || !stage) {
-            return;
+        const onWheel = function (event) {
+            if (!updateStage()) {
+                return;
+            }
+
+            event.preventDefault();
+            const rect = controller.container.getBoundingClientRect();
+            const pointerX = event.clientX - rect.left;
+            const pointerY = event.clientY - rect.top;
+            const nextZoom = clamp(controller.zoom * (event.deltaY < 0 ? 1.1 : 0.9), 0.25, 6.0);
+            const ratio = nextZoom / controller.zoom;
+
+            controller.panX = pointerX - (pointerX - controller.panX) * ratio;
+            controller.panY = pointerY - (pointerY - controller.panY) * ratio;
+            controller.zoom = nextZoom;
+            applyTransform();
+        };
+
+        const onMouseDown = function (event) {
+            if (event.button !== 0 || !updateStage()) {
+                return;
+            }
+
+            controller.dragging = true;
+            controller.lastX = event.clientX;
+            controller.lastY = event.clientY;
+            applyTransform();
+            event.preventDefault();
+        };
+
+        const onMouseMove = function (event) {
+            if (!controller.dragging || !controller.stage) {
+                return;
+            }
+
+            controller.panX += event.clientX - controller.lastX;
+            controller.panY += event.clientY - controller.lastY;
+            controller.lastX = event.clientX;
+            controller.lastY = event.clientY;
+            applyTransform();
+        };
+
+        const onDoubleClick = function () {
+            if (!updateStage()) {
+                return;
+            }
+
+            resetView();
+        };
+
+        controller.container.addEventListener('wheel', onWheel, { passive: false });
+        controller.container.addEventListener('mousedown', onMouseDown);
+        controller.container.addEventListener('dblclick', onDoubleClick);
+        window.addEventListener('mousemove', onMouseMove);
+        window.addEventListener('mouseup', stopDragging);
+        window.addEventListener('mouseleave', stopDragging);
+
+        controller.containerObserver = new MutationObserver(handleContainerMutations);
+        controller.containerObserver.observe(controller.container, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-image-key'] });
+
+        controller.cleanup = function () {
+            stopDragging();
+            controller.containerObserver?.disconnect();
+            controller.container.removeEventListener('wheel', onWheel);
+            controller.container.removeEventListener('mousedown', onMouseDown);
+            controller.container.removeEventListener('dblclick', onDoubleClick);
+            window.removeEventListener('mousemove', onMouseMove);
+            window.removeEventListener('mouseup', stopDragging);
+            window.removeEventListener('mouseleave', stopDragging);
+        };
+
+        handleContainerMutations();
+    }
+
+    function scanForContainer() {
+        const nextContainer = document.querySelector('[data-panzoom-container="true"]');
+        if (!nextContainer) {
+            return false;
         }
 
-        panX += event.clientX - lastX;
-        panY += event.clientY - lastY;
-        lastX = event.clientX;
-        lastY = event.clientY;
-        applyTransform();
-    });
+        bindContainer(nextContainer);
+        return true;
+    }
 
-    window.addEventListener('mouseup', stopDragging);
-    window.addEventListener('mouseleave', stopDragging);
+    function start() {
+        scanForContainer();
+        controller.documentObserver = new MutationObserver(scanForContainer);
+        controller.documentObserver.observe(document.documentElement, { childList: true, subtree: true });
+    }
 
-    container.addEventListener('dblclick', function () {
-        if (!updateStage()) {
-            return;
-        }
-
-        zoom = 1;
-        panX = 0;
-        panY = 0;
-        applyTransform();
-    });
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', start, { once: true });
+    } else {
+        start();
+    }
 })();
 "#;
 

@@ -17,7 +17,7 @@ use yoda_app::RepositoryBackedAppServices;
 use yoda_config::YoDaSettings;
 use yoda_core::{render_labels_to_svg, LabelObject, RenderOptions};
 use yoda_data::{DatasetRepository, LocalDatasetRepository, TreeNode};
-use yoda_ui::RootApp;
+use yoda_ui::{RootApp, PAN_ZOOM_SCRIPT};
 
 const FALLBACK_CSS: &str = r#"
 :root {
@@ -55,7 +55,8 @@ a { color: inherit; text-decoration: none; }
 .message.warn { background: rgba(255, 180, 84, 0.12); border: 1px solid rgba(255, 180, 84, 0.25); color: #ffd08a; }
 .message.error { background: rgba(255, 88, 88, 0.12); border: 1px solid rgba(255, 88, 88, 0.2); color: #ffb0b0; }
 .viewport-wrap { flex: 1; overflow: auto; padding: 18px; }
-.viewport { min-height: 100%; border: 1px solid var(--line); border-radius: 22px; background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01)); display: flex; align-items: center; justify-content: center; padding: 18px; }
+.viewport { min-height: 100%; border: 1px solid var(--line); border-radius: 22px; background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01)); display: flex; align-items: center; justify-content: center; padding: 18px; overflow: hidden; }
+.canvas-stage { transform-origin: top left; will-change: transform; }
 .canvas { position: relative; display: inline-block; line-height: 0; }
 .canvas img.main-image { display: block; max-width: min(100%, 1100px); max-height: calc(100vh - 220px); border-radius: 18px; box-shadow: 0 30px 80px rgba(0,0,0,0.45); }
 .canvas img.overlay-image { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
@@ -572,12 +573,14 @@ fn build_fallback_view(
 fn render_fallback_html(view: &FallbackViewerState) -> String {
     let image_html = match (&view.image_src, &view.overlay_src) {
         (Some(image_src), Some(overlay_src)) => format!(
-            "<div class=\"canvas\"><img class=\"main-image\" src=\"{}\" alt=\"Selected dataset image\" /><img class=\"overlay-image\" src=\"{}\" alt=\"Label overlay\" /></div>",
+            "<div class=\"canvas-stage\" data-panzoom-stage=\"true\" data-image-key=\"{}\"><div class=\"canvas\"><img class=\"main-image\" src=\"{}\" alt=\"Selected dataset image\" /><img class=\"overlay-image\" src=\"{}\" alt=\"Label overlay\" /></div></div>",
+            escape_attr(image_src),
             escape_attr(image_src),
             escape_attr(overlay_src),
         ),
         (Some(image_src), None) => format!(
-            "<div class=\"canvas\"><img class=\"main-image\" src=\"{}\" alt=\"Selected dataset image\" /></div>",
+            "<div class=\"canvas-stage\" data-panzoom-stage=\"true\" data-image-key=\"{}\"><div class=\"canvas\"><img class=\"main-image\" src=\"{}\" alt=\"Selected dataset image\" /></div></div>",
+            escape_attr(image_src),
             escape_attr(image_src),
         ),
         _ => String::from("<div class=\"empty\"><h2>Viewer Shell Ready</h2><p>Select an image from the dataset tree to render it on the server.</p></div>"),
@@ -595,8 +598,9 @@ fn render_fallback_html(view: &FallbackViewerState) -> String {
         .unwrap_or_default();
 
     format!(
-        "<!DOCTYPE html><html><head><meta charset=\"utf-8\" /><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" /><title>YoDa Rust</title><style>{}</style></head><body><main class=\"shell\"><aside class=\"panel\"><div class=\"section-title\">Dataset</div><div class=\"tree\">{}</div></aside><section class=\"content\"><div class=\"toolbar\"><span class=\"pill\">Server-rendered fallback</span><span class=\"pill\">Use dx serve for hydrated web UI</span></div>{}{}<div class=\"viewport-wrap\"><div class=\"viewport\">{}</div></div><div class=\"status\"><span>Image: {}</span><span>Dimensions: {}</span><span>Objects: {}</span><span>Mode: Viewer</span></div></section><aside class=\"panel right\"><div class=\"section-title\">Classes</div><div class=\"legend\">{}</div><div class=\"section-title\">Objects</div><div class=\"objects\">{}</div></aside></main></body></html>",
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\" /><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" /><title>YoDa Rust</title><style>{}</style><script>{}</script></head><body><main class=\"shell\"><aside class=\"panel\"><div class=\"section-title\">Dataset</div><div class=\"tree\">{}</div></aside><section class=\"content\"><div class=\"toolbar\"><span class=\"pill\">Server-rendered fallback</span><span class=\"pill\">Use dx serve for hydrated web UI</span></div>{}{}<div class=\"viewport-wrap\"><div class=\"viewport\" data-panzoom-container=\"true\">{}</div></div><div class=\"status\"><span>Image: {}</span><span>Dimensions: {}</span><span>Objects: {}</span><span>Mode: Viewer</span></div></section><aside class=\"panel right\"><div class=\"section-title\">Classes</div><div class=\"legend\">{}</div><div class=\"section-title\">Objects</div><div class=\"objects\">{}</div></aside></main></body></html>",
         FALLBACK_CSS,
+        PAN_ZOOM_SCRIPT,
         view.tree_html,
         status_html,
         error_html,

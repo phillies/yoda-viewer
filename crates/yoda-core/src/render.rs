@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use crate::{LabelObject, LabelType, PixelBBox, Point};
 
+const LABEL_FONT_FAMILY: &str = "'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderOptions {
     pub show_bbox: bool,
@@ -159,16 +161,17 @@ fn render_text_label(
     }
 
     let text = text_parts.join(" ");
-    let text_width = text.chars().count() as f32 * 6.5 + 10.0;
+    let text_width = ((text.chars().count() as f32) * 6.0).max(20.0) + 8.0;
     let text_height = 16.0_f32;
     let x = label.pixel_bbox.x;
     let y = label.pixel_bbox.y;
 
     format!(
-        "<rect x=\"{x}\" y=\"{}\" width=\"{text_width}\" height=\"{text_height}\" fill=\"rgba(0,0,0,0.7)\" rx=\"3\" /><text x=\"{}\" y=\"{}\" fill=\"white\" font-size=\"10\" font-family=\"-apple-system, BlinkMacSystemFont, sans-serif\">{text}</text>",
+        "<rect x=\"{x}\" y=\"{}\" width=\"{text_width}\" height=\"{text_height}\" fill=\"rgba(0,0,0,0.7)\" rx=\"3\" /><text x=\"{}\" y=\"{}\" fill=\"white\" font-size=\"10\" font-family=\"{}\">{text}</text>",
         y - text_height,
         x + 4.0,
         y - 4.0,
+        LABEL_FONT_FAMILY,
     )
 }
 
@@ -205,7 +208,7 @@ mod tests {
 
     use super::{
         bbox_contains, hit_test_labels, point_in_polygon, render_labels_to_svg,
-        RenderOptions,
+        RenderOptions, LABEL_FONT_FAMILY,
     };
 
     fn sample_labels() -> Vec<LabelObject> {
@@ -395,6 +398,9 @@ mod tests {
         );
         assert!(svg.contains("0 bumper"));
         assert!(svg.contains("1 wheel"));
+        assert!(svg.contains("width=\"56\""));
+        assert!(svg.contains("width=\"50\""));
+        assert!(svg.contains(LABEL_FONT_FAMILY));
     }
 
     #[test]

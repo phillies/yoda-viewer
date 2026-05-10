@@ -73,3 +73,73 @@ pwsh ./scripts/rust-dev.ps1 serve-web
 ```
 
 `dx` is required for the serve commands. If it is not installed locally yet, install the Dioxus CLI first and then rerun the script.
+
+### Run examples (Windows and Linux)
+
+The Rust apps read dataset settings from environment variables. The examples below set image/label folders plus class and color maps explicitly.
+
+#### Windows (PowerShell)
+
+Web app:
+
+```powershell
+$env:YODA_IMAGE_BASE_PATH = "example_data/images"
+$env:YODA_LABEL_BASE_PATH = "labels"
+$env:YODA_CLASS_INFO_YAML = "example_data/carparts-seg.yaml"
+$env:YODA_COLOR_MAP_YAML = "example/color_map.yaml"
+$env:YODA_HOST = "127.0.0.1"
+$env:YODA_PORT = "8080"
+cargo run -p yoda-web --features server
+```
+
+Desktop app:
+
+```powershell
+$env:YODA_IMAGE_BASE_PATH = "example_data/images"
+$env:YODA_LABEL_BASE_PATH = "labels"
+$env:YODA_CLASS_INFO_YAML = "example_data/carparts-seg.yaml"
+$env:YODA_COLOR_MAP_YAML = "example/color_map.yaml"
+$env:YODA_HOST = "127.0.0.1"
+$env:YODA_PORT = "8080"
+cargo run -p yoda-desktop
+```
+
+You can also use the helper script on Windows when `dx` is installed:
+
+```powershell
+pwsh ./scripts/rust-dev.ps1 serve-web
+pwsh ./scripts/rust-dev.ps1 serve-desktop
+```
+
+#### Linux/macOS (bash)
+
+Web app:
+
+```bash
+export YODA_IMAGE_BASE_PATH="example_data/images"
+export YODA_LABEL_BASE_PATH="labels"
+export YODA_CLASS_INFO_YAML="example_data/carparts-seg.yaml"
+export YODA_COLOR_MAP_YAML="example/color_map.yaml"
+export YODA_HOST="127.0.0.1"
+export YODA_PORT="8080"
+cargo run -p yoda-web --features server
+```
+
+Desktop app:
+
+```bash
+export YODA_IMAGE_BASE_PATH="example_data/images"
+export YODA_LABEL_BASE_PATH="labels"
+export YODA_CLASS_INFO_YAML="example_data/carparts-seg.yaml"
+export YODA_COLOR_MAP_YAML="example/color_map.yaml"
+export YODA_HOST="127.0.0.1"
+export YODA_PORT="8080"
+cargo run -p yoda-desktop
+```
+
+With bash on Linux/macOS, use `dx` directly:
+
+```bash
+dx serve --package yoda-web --platform web
+dx serve --package yoda-desktop --platform desktop
+```
