@@ -785,7 +785,7 @@ fn render_object_list_html(
 
 fn build_overlay_data_uri(width: u32, height: u32, inner_svg: &str) -> String {
     let svg = format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {} {}\" width=\"{}\" height=\"{}\">{}</svg>",
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {} {}\" width=\"{}\" height=\"{}\" preserveAspectRatio=\"xMinYMin meet\">{}</svg>",
         width,
         height,
         width,

@@ -892,7 +892,7 @@ fn render_overlay_data_uri(
     );
 
     let wrapped = format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {} {}\" width=\"{}\" height=\"{}\">{svg}</svg>",
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {} {}\" width=\"{}\" height=\"{}\" preserveAspectRatio=\"xMinYMin meet\">{svg}</svg>",
         dimensions.width,
         dimensions.height,
         dimensions.width,
