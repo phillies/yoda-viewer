@@ -888,6 +888,7 @@ fn render_overlay_data_uri(
             show_class_id: state.show_class_id,
             show_class_name: state.show_class_name,
             selected_index: state.selected_object_index,
+            image_width: dimensions.width,
         },
     );
 

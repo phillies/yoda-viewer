@@ -11,6 +11,7 @@ pub struct RenderOptions {
     pub show_class_id: bool,
     pub show_class_name: bool,
     pub selected_index: Option<usize>,
+    pub image_width: u32,
 }
 
 impl Default for RenderOptions {
@@ -21,6 +22,7 @@ impl Default for RenderOptions {
             show_class_id: false,
             show_class_name: false,
             selected_index: None,
+            image_width: 640,
         }
     }
 }
@@ -102,7 +104,8 @@ pub fn render_labels_to_svg(
         }
 
         if options.show_class_id || options.show_class_name {
-            elements.push(render_text_label(label, class_map, options));
+            let scale = (options.image_width as f32 / 640.0).max(1.0);
+            elements.push(render_text_label(label, class_map, options, scale));
         }
     }
 
@@ -147,6 +150,7 @@ fn render_text_label(
     label: &LabelObject,
     class_map: Option<&HashMap<u32, String>>,
     options: &RenderOptions,
+    scale: f32,
 ) -> String {
     let mut text_parts = Vec::new();
     if options.show_class_id {
@@ -161,16 +165,18 @@ fn render_text_label(
     }
 
     let text = text_parts.join(" ");
-    let text_width = ((text.chars().count() as f32) * 6.0).max(20.0) + 8.0;
-    let text_height = 16.0_f32;
+    let char_width = 6.0 * scale;
+    let text_width = ((text.chars().count() as f32) * char_width).max(20.0 * scale) + 8.0 * scale;
+    let text_height = 16.0 * scale;
+    let font_size = (10.0 * scale).round() as u32;
     let x = label.pixel_bbox.x;
     let y = label.pixel_bbox.y;
 
     format!(
-        "<rect x=\"{x}\" y=\"{}\" width=\"{text_width}\" height=\"{text_height}\" fill=\"rgba(0,0,0,0.7)\" rx=\"3\" /><text x=\"{}\" y=\"{}\" fill=\"white\" font-size=\"10\" font-family=\"{}\">{text}</text>",
+        "<rect x=\"{x}\" y=\"{}\" width=\"{text_width}\" height=\"{text_height}\" fill=\"rgba(0,0,0,0.7)\" rx=\"3\" /><text x=\"{}\" y=\"{}\" fill=\"white\" font-size=\"{font_size}\" font-family=\"{}\">{text}</text>",
         y - text_height,
-        x + 4.0,
-        y - 4.0,
+        x + 4.0 * scale,
+        y - 4.0 * scale,
         LABEL_FONT_FAMILY,
     )
 }
@@ -298,6 +304,7 @@ mod tests {
                 show_class_id: false,
                 show_class_name: false,
                 selected_index: None,
+                image_width: 640,
             },
         );
         assert!(svg.is_empty());
@@ -453,6 +460,40 @@ mod tests {
         let labels = sample_labels();
         let hit = hit_test_labels(&labels, Point::new(200.0, 100.0));
         assert_eq!(hit, Some(1));
+    }
+
+    #[test]
+    fn label_scales_with_large_image() {
+        let svg = render_labels_to_svg(
+            &sample_labels(),
+            Some(&color_map()),
+            None,
+            &RenderOptions {
+                show_segmask: false,
+                show_class_id: true,
+                image_width: 1920,
+                ..RenderOptions::default()
+            },
+        );
+        // At 1920px (3x baseline of 640px), font-size should be 30 (10 * 3)
+        assert!(svg.contains("font-size=\"30\""));
+    }
+
+    #[test]
+    fn label_does_not_shrink_below_baseline() {
+        let svg = render_labels_to_svg(
+            &sample_labels(),
+            Some(&color_map()),
+            None,
+            &RenderOptions {
+                show_segmask: false,
+                show_class_id: true,
+                image_width: 320,
+                ..RenderOptions::default()
+            },
+        );
+        // Images smaller than 640px baseline should still use the baseline font-size
+        assert!(svg.contains("font-size=\"10\""));
     }
 
     #[test]
