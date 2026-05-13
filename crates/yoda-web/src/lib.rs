@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::extract::{Extension, Query};
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
@@ -15,9 +15,12 @@ use tower_http::trace::TraceLayer;
 use yoda_app::AppServices;
 use yoda_app::RepositoryBackedAppServices;
 use yoda_config::YoDaSettings;
-use yoda_core::{render_labels_to_svg, LabelObject, RenderOptions};
-use yoda_data::{DatasetRepository, FlatIndex, FlatNode, LocalDatasetRepository, TreeNode, scan_dataset_tree};
-use yoda_ui::{RootApp, PAN_ZOOM_SCRIPT};
+use yoda_core::{LabelObject, RenderOptions, render_labels_to_svg};
+use yoda_data::{
+    DatasetRepository, FlatIndex, FlatNode, LocalDatasetRepository, TreeNode,
+    scan_dataset_tree,
+};
+use yoda_ui::{PAN_ZOOM_SCRIPT, RootApp};
 
 const FALLBACK_CSS: &str = r#"
 :root {
@@ -210,11 +213,7 @@ pub struct ApiError {
 
 impl ApiError {
     fn new(status: StatusCode, code: &'static str, message: impl Into<String>) -> Self {
-        Self {
-            status,
-            code,
-            message: message.into(),
-        }
+        Self { status, code, message: message.into() }
     }
 
     fn bad_request(message: impl Into<String>) -> Self {
@@ -236,13 +235,7 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (
-            self.status,
-            Json(ErrorBody {
-                code: self.code,
-                message: self.message,
-            }),
-        )
+        (self.status, Json(ErrorBody { code: self.code, message: self.message }))
             .into_response()
     }
 }
@@ -322,26 +315,21 @@ fn ensure_public_dir() -> Result<PathBuf, ApiError> {
 }
 
 fn log_public_assets_state(public_dir: &Path) -> bool {
-    let has_client_assets = public_dir.join("index.html").is_file() || fs::read_dir(public_dir)
-        .ok()
-        .into_iter()
-        .flatten()
-        .flatten()
-        .any(|entry| {
+    let has_client_assets = public_dir.join("index.html").is_file()
+        || fs::read_dir(public_dir).ok().into_iter().flatten().flatten().any(|entry| {
             let path = entry.path();
             if path.is_dir() {
-                return fs::read_dir(&path)
-                    .ok()
-                    .into_iter()
-                    .flatten()
-                    .flatten()
-                    .any(|nested| {
+                return fs::read_dir(&path).ok().into_iter().flatten().flatten().any(
+                    |nested| {
                         nested
                             .path()
                             .extension()
                             .and_then(|extension| extension.to_str())
-                            .is_some_and(|extension| matches!(extension, "js" | "mjs" | "wasm"))
-                    });
+                            .is_some_and(|extension| {
+                                matches!(extension, "js" | "mjs" | "wasm")
+                            })
+                    },
+                );
             }
 
             path.extension()
@@ -368,11 +356,11 @@ async fn health() -> Json<HealthResponse> {
     })
 }
 
-async fn list_tree(Extension(state): Extension<Arc<BackendState>>) -> Result<Json<TreeNodesResponse>, ApiError> {
+async fn list_tree(
+    Extension(state): Extension<Arc<BackendState>>,
+) -> Result<Json<TreeNodesResponse>, ApiError> {
     tracing::info!(image_root = %state.image_root.display(), "listing dataset root");
-    Ok(Json(TreeNodesResponse {
-        nodes: state.repository.list_root_nodes()?,
-    }))
+    Ok(Json(TreeNodesResponse { nodes: state.repository.list_root_nodes()? }))
 }
 
 async fn list_children(
@@ -381,14 +369,15 @@ async fn list_children(
 ) -> Result<Json<TreeNodesResponse>, ApiError> {
     let path = resolve_path(&state.image_root, &query.path)?;
     if !path.is_dir() {
-        return Err(ApiError::not_found(format!("directory not found: {}", path.display())));
+        return Err(ApiError::not_found(format!(
+            "directory not found: {}",
+            path.display()
+        )));
     }
 
     tracing::info!(path = %path.display(), "expanding dataset directory");
 
-    Ok(Json(TreeNodesResponse {
-        nodes: state.repository.expand_directory(&path)?,
-    }))
+    Ok(Json(TreeNodesResponse { nodes: state.repository.expand_directory(&path)? }))
 }
 
 async fn tree_status(
@@ -408,7 +397,6 @@ async fn tree_flat(
         image_count: state.flat_index.image_count,
     })
 }
-
 
 async fn image_metadata(
     Extension(state): Extension<Arc<BackendState>>,
@@ -441,10 +429,7 @@ async fn image_bytes(
     let bytes = state.repository.image_bytes(&image_path)?;
     let content_type = mime_type_for_image(&image_path);
 
-    Ok((
-        [(header::CONTENT_TYPE, HeaderValue::from_static(content_type))],
-        bytes,
-    )
+    Ok(([(header::CONTENT_TYPE, HeaderValue::from_static(content_type))], bytes)
         .into_response())
 }
 
@@ -488,19 +473,19 @@ async fn save_labels(
     }))
 }
 
-async fn class_map(Extension(state): Extension<Arc<BackendState>>) -> Result<Json<ClassMapResponse>, ApiError> {
+async fn class_map(
+    Extension(state): Extension<Arc<BackendState>>,
+) -> Result<Json<ClassMapResponse>, ApiError> {
     let services = state.services();
-    Ok(Json(ClassMapResponse {
-        class_map: services.load_class_map()?,
-    }))
+    Ok(Json(ClassMapResponse { class_map: services.load_class_map()? }))
 }
 
-async fn color_map(Extension(state): Extension<Arc<BackendState>>) -> Result<Json<ColorMapResponse>, ApiError> {
+async fn color_map(
+    Extension(state): Extension<Arc<BackendState>>,
+) -> Result<Json<ColorMapResponse>, ApiError> {
     let tuples = state.repository.color_map()?;
-    let color_map = tuples
-        .into_iter()
-        .map(|(class_id, (r, g, b))| (class_id, [r, g, b]))
-        .collect();
+    let color_map =
+        tuples.into_iter().map(|(class_id, (r, g, b))| (class_id, [r, g, b])).collect();
 
     Ok(Json(ColorMapResponse { color_map }))
 }
@@ -548,61 +533,73 @@ fn build_fallback_view(
         loaded.as_ref().map(|loaded| loaded.image_path.as_path()),
     )?;
 
-    let (image_src, overlay_src, image_name, dimensions_text, object_count, class_legend_html, object_list_html, status_message) =
-        if let Some(loaded) = loaded {
-            let image_path = dataset_relative_path(&state.image_root, &loaded.image_path);
-            let image_src = format!(
-                "/api/image?image_path={}",
-                urlencoding::encode(&image_path)
-            );
-            let visible_labels = loaded.labels.clone();
-            let overlay_svg = render_labels_to_svg(
-                &visible_labels,
-                Some(&color_map),
-                Some(&class_map),
-                &RenderOptions {
-                    show_bbox: true,
-                    show_segmask: true,
-                    show_class_id: false,
-                    show_class_name: true,
-                    selected_index: None,
-                },
-            );
-            let overlay_src = Some(build_overlay_data_uri(
-                loaded.image_dimensions.width,
-                loaded.image_dimensions.height,
-                &overlay_svg,
-            ));
-            let class_legend_html = render_class_legend_html(&visible_labels, &class_map, &color_map);
-            let object_list_html = render_object_list_html(&visible_labels, &class_map, &color_map);
+    let (
+        image_src,
+        overlay_src,
+        image_name,
+        dimensions_text,
+        object_count,
+        class_legend_html,
+        object_list_html,
+        status_message,
+    ) = if let Some(loaded) = loaded {
+        let image_path = dataset_relative_path(&state.image_root, &loaded.image_path);
+        let image_src =
+            format!("/api/image?image_path={}", urlencoding::encode(&image_path));
+        let visible_labels = loaded.labels.clone();
+        let overlay_svg = render_labels_to_svg(
+            &visible_labels,
+            Some(&color_map),
+            Some(&class_map),
+            &RenderOptions {
+                show_bbox: true,
+                show_segmask: true,
+                show_class_id: false,
+                show_class_name: true,
+                selected_index: None,
+                image_width: loaded.image_dimensions.width,
+            },
+        );
+        let overlay_src = Some(build_overlay_data_uri(
+            loaded.image_dimensions.width,
+            loaded.image_dimensions.height,
+            &overlay_svg,
+        ));
+        let class_legend_html =
+            render_class_legend_html(&visible_labels, &class_map, &color_map);
+        let object_list_html =
+            render_object_list_html(&visible_labels, &class_map, &color_map);
 
-            (
-                Some(image_src),
-                overlay_src,
-                loaded
-                    .image_path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("Unknown")
-                    .to_string(),
-                format!("{} x {}", loaded.image_dimensions.width, loaded.image_dimensions.height),
-                visible_labels.len(),
-                class_legend_html,
-                object_list_html,
-                Some(String::from("Rendered from server-side fallback viewer")),
-            )
-        } else {
-            (
-                None,
-                None,
-                String::from("None"),
-                String::from("-"),
-                0,
-                String::new(),
-                String::new(),
-                Some(String::from("No image found in dataset")),
-            )
-        };
+        (
+            Some(image_src),
+            overlay_src,
+            loaded
+                .image_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("Unknown")
+                .to_string(),
+            format!(
+                "{} x {}",
+                loaded.image_dimensions.width, loaded.image_dimensions.height
+            ),
+            visible_labels.len(),
+            class_legend_html,
+            object_list_html,
+            Some(String::from("Rendered from server-side fallback viewer")),
+        )
+    } else {
+        (
+            None,
+            None,
+            String::from("None"),
+            String::from("-"),
+            0,
+            String::new(),
+            String::new(),
+            Some(String::from("No image found in dataset")),
+        )
+    };
 
     Ok(FallbackViewerState {
         tree_html,
@@ -631,18 +628,24 @@ fn render_fallback_html(view: &FallbackViewerState) -> String {
             escape_attr(image_src),
             escape_attr(image_src),
         ),
-        _ => String::from("<div class=\"empty\"><h2>Viewer Shell Ready</h2><p>Select an image from the dataset tree to render it on the server.</p></div>"),
+        _ => String::from(
+            "<div class=\"empty\"><h2>Viewer Shell Ready</h2><p>Select an image from the dataset tree to render it on the server.</p></div>",
+        ),
     };
 
     let status_html = view
         .status_message
         .as_ref()
-        .map(|message| format!("<div class=\"message warn\">{}</div>", escape_html(message)))
+        .map(|message| {
+            format!("<div class=\"message warn\">{}</div>", escape_html(message))
+        })
         .unwrap_or_default();
     let error_html = view
         .error_message
         .as_ref()
-        .map(|message| format!("<div class=\"message error\">{}</div>", escape_html(message)))
+        .map(|message| {
+            format!("<div class=\"message error\">{}</div>", escape_html(message))
+        })
         .unwrap_or_default();
 
     format!(
@@ -668,7 +671,12 @@ fn render_tree_html(
 ) -> Result<String, ApiError> {
     let mut html = String::new();
     for entry in sorted_entries(root)? {
-        html.push_str(&render_tree_entry_html(repository, root, &entry, selected_image)?);
+        html.push_str(&render_tree_entry_html(
+            repository,
+            root,
+            &entry,
+            selected_image,
+        )?);
     }
     Ok(html)
 }
@@ -679,12 +687,18 @@ fn render_tree_entry_html(
     path: &Path,
     selected_image: Option<&Path>,
 ) -> Result<String, ApiError> {
-    let label = escape_html(path.file_name().and_then(|name| name.to_str()).unwrap_or("?"));
+    let label =
+        escape_html(path.file_name().and_then(|name| name.to_str()).unwrap_or("?"));
 
     if path.is_dir() {
         let mut children_html = String::new();
         for child in sorted_entries(path)? {
-            children_html.push_str(&render_tree_entry_html(repository, root, &child, selected_image)?);
+            children_html.push_str(&render_tree_entry_html(
+                repository,
+                root,
+                &child,
+                selected_image,
+            )?);
         }
 
         return Ok(format!(
@@ -700,15 +714,8 @@ fn render_tree_entry_html(
     }
 
     let image_path = dataset_relative_path(root, path);
-    let href = format!(
-        "/?image_path={}",
-        urlencoding::encode(&image_path)
-    );
-    let class = if selected_image == Some(path) {
-        "selected"
-    } else {
-        ""
-    };
+    let href = format!("/?image_path={}", urlencoding::encode(&image_path));
+    let class = if selected_image == Some(path) { "selected" } else { "" };
 
     let _ = repository;
     Ok(format!(
@@ -786,11 +793,7 @@ fn render_object_list_html(
 fn build_overlay_data_uri(width: u32, height: u32, inner_svg: &str) -> String {
     let svg = format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {} {}\" width=\"{}\" height=\"{}\" preserveAspectRatio=\"xMinYMin meet\">{}</svg>",
-        width,
-        height,
-        width,
-        height,
-        inner_svg,
+        width, height, width, height, inner_svg,
     );
     format!("data:image/svg+xml;utf8,{}", urlencoding::encode(&svg))
 }
@@ -831,9 +834,12 @@ fn find_first_image(root: &Path) -> Result<Option<PathBuf>, ApiError> {
 }
 
 fn is_image_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "jpg" | "jpeg" | "png" | "bmp" | "webp"))
+    path.extension().and_then(|extension| extension.to_str()).is_some_and(|extension| {
+        matches!(
+            extension.to_ascii_lowercase().as_str(),
+            "jpg" | "jpeg" | "png" | "bmp" | "webp"
+        )
+    })
 }
 
 fn lower_file_name(path: &Path) -> String {
@@ -848,7 +854,9 @@ fn dataset_relative_path(root: &Path, path: &Path) -> String {
         .unwrap_or(path)
         .components()
         .filter_map(|component| match component {
-            std::path::Component::Normal(value) => Some(value.to_string_lossy().into_owned()),
+            std::path::Component::Normal(value) => {
+                Some(value.to_string_lossy().into_owned())
+            }
             _ => None,
         })
         .collect::<Vec<_>>()
@@ -944,14 +952,17 @@ fn mime_type_for_image(path: &Path) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use axum::body::{to_bytes, Body};
+    use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
     use tempfile::TempDir;
     use tower::util::ServiceExt;
     use yoda_config::YoDaSettings;
     use yoda_core::LabelObject;
 
-    use super::{build_api_router, ClassMapResponse, ColorMapResponse, HealthResponse, LabelsResponse, SaveLabelsRequest, TreeNodesResponse};
+    use super::{
+        ClassMapResponse, ColorMapResponse, HealthResponse, LabelsResponse,
+        SaveLabelsRequest, TreeNodesResponse, build_api_router,
+    };
 
     fn sample_dataset() -> TempDir {
         let temp = TempDir::new().expect("create temp dir");
@@ -968,7 +979,8 @@ mod tests {
             "0 0.1 0.2 0.3 0.2 0.3 0.8 0.1 0.8 0.05 0.5\n",
         )
         .expect("write labels");
-        std::fs::write(label_dir.join("test2.txt"), "1 0.5 0.5 0.4 0.6\n").expect("write labels");
+        std::fs::write(label_dir.join("test2.txt"), "1 0.5 0.5 0.4 0.6\n")
+            .expect("write labels");
 
         temp
     }
@@ -989,12 +1001,19 @@ mod tests {
         let temp = sample_dataset();
         let app = build_api_router(settings_for(&temp)).expect("build router");
         let response = app
-            .oneshot(Request::builder().uri("/api/health").body(Body::empty()).expect("request"))
+            .oneshot(
+                Request::builder()
+                    .uri("/api/health")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
             .await
             .expect("response");
         assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.expect("body bytes");
-        let payload: HealthResponse = serde_json::from_slice(&body).expect("parse health");
+        let body =
+            to_bytes(response.into_body(), usize::MAX).await.expect("body bytes");
+        let payload: HealthResponse =
+            serde_json::from_slice(&body).expect("parse health");
         assert_eq!(payload.status, "ok");
     }
 
@@ -1003,12 +1022,19 @@ mod tests {
         let temp = sample_dataset();
         let app = build_api_router(settings_for(&temp)).expect("build router");
         let response = app
-            .oneshot(Request::builder().uri("/api/tree").body(Body::empty()).expect("request"))
+            .oneshot(
+                Request::builder()
+                    .uri("/api/tree")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
             .await
             .expect("response");
         assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.expect("body bytes");
-        let payload: TreeNodesResponse = serde_json::from_slice(&body).expect("parse tree");
+        let body =
+            to_bytes(response.into_body(), usize::MAX).await.expect("body bytes");
+        let payload: TreeNodesResponse =
+            serde_json::from_slice(&body).expect("parse tree");
         assert_eq!(payload.nodes.len(), 1);
         assert_eq!(payload.nodes[0].label, "train");
     }
@@ -1027,8 +1053,10 @@ mod tests {
             .await
             .expect("response");
         assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.expect("body bytes");
-        let payload: LabelsResponse = serde_json::from_slice(&body).expect("parse labels");
+        let body =
+            to_bytes(response.into_body(), usize::MAX).await.expect("body bytes");
+        let payload: LabelsResponse =
+            serde_json::from_slice(&body).expect("parse labels");
         assert_eq!(payload.width, 640);
         assert_eq!(payload.height, 480);
         assert_eq!(payload.labels.len(), 1);
@@ -1052,7 +1080,8 @@ mod tests {
             response.headers().get("content-type").expect("content type"),
             "image/png"
         );
-        let body = to_bytes(response.into_body(), usize::MAX).await.expect("body bytes");
+        let body =
+            to_bytes(response.into_body(), usize::MAX).await.expect("body bytes");
         assert!(!body.is_empty());
     }
 
@@ -1066,7 +1095,10 @@ mod tests {
                 class_id: 9,
                 label_type: yoda_core::LabelType::Bbox,
                 normalized_coords: vec![0.5, 0.5, 0.4, 0.6],
-                pixel_points: vec![yoda_core::Point::new(192.0, 96.0), yoda_core::Point::new(448.0, 384.0)],
+                pixel_points: vec![
+                    yoda_core::Point::new(192.0, 96.0),
+                    yoda_core::Point::new(448.0, 384.0),
+                ],
                 pixel_bbox: yoda_core::PixelBBox::new(192.0, 96.0, 256.0, 288.0),
                 visible: true,
             }],
@@ -1085,8 +1117,9 @@ mod tests {
             .await
             .expect("response");
         assert_eq!(response.status(), StatusCode::OK);
-        let written = std::fs::read_to_string(temp.path().join("labels/train/test2.txt"))
-            .expect("read labels");
+        let written =
+            std::fs::read_to_string(temp.path().join("labels/train/test2.txt"))
+                .expect("read labels");
         assert!(written.starts_with("9 "));
     }
 
@@ -1097,21 +1130,35 @@ mod tests {
 
         let class_response = app
             .clone()
-            .oneshot(Request::builder().uri("/api/class-map").body(Body::empty()).expect("request"))
+            .oneshot(
+                Request::builder()
+                    .uri("/api/class-map")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
             .await
             .expect("response");
         assert_eq!(class_response.status(), StatusCode::OK);
-        let class_body = to_bytes(class_response.into_body(), usize::MAX).await.expect("body bytes");
-        let classes: ClassMapResponse = serde_json::from_slice(&class_body).expect("parse class map");
+        let class_body =
+            to_bytes(class_response.into_body(), usize::MAX).await.expect("body bytes");
+        let classes: ClassMapResponse =
+            serde_json::from_slice(&class_body).expect("parse class map");
         assert!(classes.class_map.is_empty());
 
         let color_response = app
-            .oneshot(Request::builder().uri("/api/color-map").body(Body::empty()).expect("request"))
+            .oneshot(
+                Request::builder()
+                    .uri("/api/color-map")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
             .await
             .expect("response");
         assert_eq!(color_response.status(), StatusCode::OK);
-        let color_body = to_bytes(color_response.into_body(), usize::MAX).await.expect("body bytes");
-        let colors: ColorMapResponse = serde_json::from_slice(&color_body).expect("parse color map");
+        let color_body =
+            to_bytes(color_response.into_body(), usize::MAX).await.expect("body bytes");
+        let colors: ColorMapResponse =
+            serde_json::from_slice(&color_body).expect("parse color map");
         assert!(colors.color_map.contains_key(&0));
     }
 
@@ -1119,7 +1166,8 @@ mod tests {
     async fn rejects_paths_outside_dataset_root() {
         let temp = sample_dataset();
         let app = build_api_router(settings_for(&temp)).expect("build router");
-        std::fs::write(temp.path().join("outside.jpg"), b"x").expect("write outside file");
+        std::fs::write(temp.path().join("outside.jpg"), b"x")
+            .expect("write outside file");
         let response = app
             .oneshot(
                 Request::builder()
