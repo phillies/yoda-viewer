@@ -261,6 +261,7 @@ button, select { font: inherit; }
 .panel-inner { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .section-title { padding: 16px 18px 10px; font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); }
 .tree-scroll, .side-scroll { overflow: auto; min-height: 0; padding: 0 10px 14px; }
+.classes-scroll, .objects-scroll { overflow: auto; min-height: 0; max-height: 50%; padding: 0 10px 14px; }
 .tree-node { margin-left: var(--indent); }
 .tree-row { width: 100%; display: flex; align-items: center; gap: 8px; border: 1px solid transparent; background: transparent; color: inherit; padding: 8px 10px; border-radius: 10px; text-align: left; cursor: pointer; }
 .tree-row:hover { background: rgba(233,223,200,0.06); border-color: rgba(233,223,200,0.08); }
@@ -444,9 +445,9 @@ fn compute_visible_rows(
 
 /// Collect rows for the filtered tree view.
 ///
-/// When a class filter is active, only matching images and their ancestor
-/// folders are shown. Ancestor folders are force-expanded so matches are
-/// immediately visible without requiring manual tree expansion.
+/// When a class filter is active, only folders that contain matching images
+/// (directly or transitively) are shown. Empty folders are hidden. Expand/collapse
+/// state is respected: children are only rendered for expanded folders.
 fn collect_filtered_rows(
     parent_id: Option<u32>,
     depth: usize,
@@ -454,6 +455,7 @@ fn collect_filtered_rows(
     children_map: &HashMap<Option<u32>, Vec<u32>>,
     matching_images: &std::collections::HashSet<u32>,
     matching_folders: &std::collections::HashSet<u32>,
+    expanded_dirs: &std::collections::BTreeSet<u32>,
     result: &mut Vec<VisibleRow>,
 ) {
     let Some(children_ids) = children_map.get(&parent_id) else { return };
@@ -476,6 +478,7 @@ fn collect_filtered_rows(
             NodeKind::Folder => {
                 if matching_folders.contains(&child_id) {
                     let has_children = children_map.contains_key(&Some(child_id));
+                    let is_expanded = expanded_dirs.contains(&child_id);
                     result.push(VisibleRow {
                         id: child_id,
                         name: node.name.clone(),
@@ -483,17 +486,20 @@ fn collect_filtered_rows(
                         path: node.path.clone(),
                         depth,
                         has_children,
-                        is_expanded: true, // force-expand matching folders
+                        is_expanded,
                     });
-                    collect_filtered_rows(
-                        Some(child_id),
-                        depth + 1,
-                        nodes,
-                        children_map,
-                        matching_images,
-                        matching_folders,
-                        result,
-                    );
+                    if is_expanded {
+                        collect_filtered_rows(
+                            Some(child_id),
+                            depth + 1,
+                            nodes,
+                            children_map,
+                            matching_images,
+                            matching_folders,
+                            expanded_dirs,
+                            result,
+                        );
+                    }
                 }
             }
         }
@@ -507,6 +513,7 @@ fn compute_filtered_rows(
     class_index: &HashMap<String, Vec<u32>>,
     filter_classes: &BTreeSet<u32>,
     filter_mode: FilterMode,
+    expanded_dirs: &std::collections::BTreeSet<u32>,
 ) -> Vec<VisibleRow> {
     use std::collections::HashSet;
 
@@ -558,6 +565,7 @@ fn compute_filtered_rows(
         children_map,
         &matching_image_ids,
         &matching_folder_ids,
+        expanded_dirs,
         &mut result,
     );
     result
@@ -680,6 +688,7 @@ pub fn App(api_base: Option<String>) -> Element {
                 &state.class_index,
                 &state.filter_classes,
                 state.filter_mode,
+                &expanded,
             )
         }
     });
@@ -1000,7 +1009,7 @@ pub fn App(api_base: Option<String>) -> Element {
             aside { class: "panel right",
                 div { class: "panel-inner",
                     div { class: "section-title", "Classes" }
-                    div { class: "side-scroll",
+                    div { class: "classes-scroll",
                         for class_id in class_ids.iter().copied() {
                             ClassLegendRow {
                                 key: "legend-{class_id}",
@@ -1018,8 +1027,9 @@ pub fn App(api_base: Option<String>) -> Element {
                                 }
                             }
                         }
-                        div { class: "stack-gap" }
-                        div { class: "section-title", "Objects" }
+                    }
+                    div { class: "section-title", "Objects" }
+                    div { class: "objects-scroll",
                         for label in state_value.current_labels.iter().cloned() {
                             ObjectRow {
                                 key: "object-{label.index}",
@@ -1121,19 +1131,24 @@ fn ClassFilterBar(
                         let is_selected = filter_classes.contains(&class_id);
                         let rgb = color_map.get(&class_id).copied().unwrap_or_else(|| yoda_core::default_color_for_class(class_id));
                         let color_str = format!("rgb({},{},{})", rgb.0, rgb.1, rgb.2);
-                        let chip_style = if is_selected {
-                            format!("border-color: {color_str}; background: {color_str}22;")
-                        } else {
-                            String::new()
-                        };
                         rsx! {
-                            button {
-                                key: "chip-{class_id}",
-                                class: if is_selected { "filter-chip active" } else { "filter-chip" },
-                                style: chip_style,
-                                onclick: move |_| ontoggle_class.call(class_id),
-                                div { class: "chip-swatch", style: "background: {color_str}" }
-                                span { "{name}" }
+                            if is_selected {
+                                button {
+                                    key: "chip-{class_id}",
+                                    class: "filter-chip active",
+                                    style: "border-color: {color_str}; background: {color_str}22;",
+                                    onclick: move |_| ontoggle_class.call(class_id),
+                                    div { class: "chip-swatch", style: "background: {color_str}" }
+                                    span { "{name}" }
+                                }
+                            } else {
+                                button {
+                                    key: "chip-{class_id}",
+                                    class: "filter-chip",
+                                    onclick: move |_| ontoggle_class.call(class_id),
+                                    div { class: "chip-swatch", style: "background: {color_str}" }
+                                    span { "{name}" }
+                                }
                             }
                         }
                     }
