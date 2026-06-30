@@ -1,3 +1,9 @@
+mod class_index;
+
+pub use class_index::{
+    extract_class_ids, extract_class_ids_from_label_file, ClassIndex, FilterMode,
+};
+
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};

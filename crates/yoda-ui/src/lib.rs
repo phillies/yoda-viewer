@@ -6,7 +6,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use yoda_app::{apply_action, AccessMode, AppAction, AppEffect, AppState, LoadedImage};
 use yoda_core::{render_labels_to_svg, LabelObject, RenderOptions};
-use yoda_data::{FlatNode, NodeIcon, NodeKind};
+use yoda_data::{FlatNode, FilterMode, NodeIcon, NodeKind};
 
 pub const PAN_ZOOM_SCRIPT: &str = r#"
 (function () {
@@ -272,6 +272,19 @@ button, select { font: inherit; }
   .panel.right { border-top: 1px solid var(--line); }
   .canvas img.main-image { max-height: 50vh; }
 }
+.filter-bar { padding: 8px 10px 4px; border-bottom: 1px solid var(--line); }
+.filter-bar-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.filter-label { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+.filter-clear { background: transparent; color: var(--warn); border: 1px solid rgba(207,156,90,0.3); border-radius: 8px; padding: 3px 8px; font-size: 11px; cursor: pointer; }
+.filter-clear:hover { background: rgba(207,156,90,0.12); }
+.filter-mode { display: flex; gap: 10px; margin-bottom: 6px; font-size: 12px; color: var(--muted); }
+.filter-mode label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+.filter-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.filter-chip { display: inline-flex; align-items: center; gap: 6px; background: rgba(233,223,200,0.04); border: 1px solid var(--line); border-radius: 20px; padding: 4px 10px; font-size: 12px; cursor: pointer; color: inherit; }
+.filter-chip:hover { background: rgba(233,223,200,0.08); }
+.filter-chip.active { border-color: var(--accent); background: var(--accent-soft); }
+.chip-swatch { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.filter-active-badge { color: var(--accent); border-color: rgba(127, 159, 75, 0.42); }
 "#;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -291,6 +304,13 @@ struct ClassMapResponse {
 #[derive(Debug, Clone, Deserialize)]
 struct ColorMapResponse {
     color_map: HashMap<u32, [u8; 3]>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ClassIndexResponse {
+    entries: HashMap<String, Vec<u32>>,
+    #[allow(dead_code)]
+    all_class_ids: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -374,6 +394,123 @@ fn compute_visible_rows(
     result
 }
 
+/// Collect rows for the filtered tree view.
+///
+/// When a class filter is active, only matching images and their ancestor
+/// folders are shown. Ancestor folders are force-expanded so matches are
+/// immediately visible without requiring manual tree expansion.
+fn collect_filtered_rows(
+    parent_id: Option<u32>,
+    depth: usize,
+    nodes: &[FlatNode],
+    children_map: &HashMap<Option<u32>, Vec<u32>>,
+    matching_images: &std::collections::HashSet<u32>,
+    matching_folders: &std::collections::HashSet<u32>,
+    result: &mut Vec<VisibleRow>,
+) {
+    let Some(children_ids) = children_map.get(&parent_id) else { return };
+    for &child_id in children_ids {
+        let Some(node) = nodes.get(child_id as usize) else { continue };
+        match node.kind {
+            NodeKind::Image => {
+                if matching_images.contains(&child_id) {
+                    result.push(VisibleRow {
+                        id: child_id,
+                        name: node.name.clone(),
+                        kind: NodeKind::Image,
+                        path: node.path.clone(),
+                        depth,
+                        has_children: false,
+                        is_expanded: false,
+                    });
+                }
+            }
+            NodeKind::Folder => {
+                if matching_folders.contains(&child_id) {
+                    let has_children = children_map.contains_key(&Some(child_id));
+                    result.push(VisibleRow {
+                        id: child_id,
+                        name: node.name.clone(),
+                        kind: NodeKind::Folder,
+                        path: node.path.clone(),
+                        depth,
+                        has_children,
+                        is_expanded: true, // force-expand matching folders
+                    });
+                    collect_filtered_rows(
+                        Some(child_id),
+                        depth + 1,
+                        nodes,
+                        children_map,
+                        matching_images,
+                        matching_folders,
+                        result,
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Compute the tree rows shown when a class filter is active.
+fn compute_filtered_rows(
+    nodes: &[FlatNode],
+    children_map: &HashMap<Option<u32>, Vec<u32>>,
+    class_index: &HashMap<String, Vec<u32>>,
+    filter_classes: &BTreeSet<u32>,
+    filter_mode: FilterMode,
+) -> Vec<VisibleRow> {
+    use std::collections::HashSet;
+
+    // Collect matching image node IDs.
+    let matching_image_ids: HashSet<u32> = nodes
+        .iter()
+        .filter(|node| {
+            if node.kind != NodeKind::Image {
+                return false;
+            }
+            let Some(class_ids) = class_index.get(&node.path) else {
+                return false;
+            };
+            match filter_mode {
+                FilterMode::Any => class_ids.iter().any(|id| filter_classes.contains(id)),
+                FilterMode::All => filter_classes.iter().all(|id| class_ids.contains(id)),
+            }
+        })
+        .map(|n| n.id)
+        .collect();
+
+    // Collect all ancestor folder IDs for those images.
+    let mut matching_folder_ids: HashSet<u32> = HashSet::new();
+    for &image_id in &matching_image_ids {
+        let mut current = image_id;
+        loop {
+            let Some(node) = nodes.get(current as usize) else { break };
+            match node.parent_id {
+                Some(parent_id) => {
+                    if !matching_folder_ids.insert(parent_id) {
+                        break; // already processed this ancestor chain
+                    }
+                    current = parent_id;
+                }
+                None => break,
+            }
+        }
+    }
+
+    let mut result = Vec::new();
+    collect_filtered_rows(
+        None,
+        0,
+        nodes,
+        children_map,
+        &matching_image_ids,
+        &matching_folder_ids,
+        &mut result,
+    );
+    result
+}
+
 #[component]
 pub fn RootApp() -> Element {
     rsx! {
@@ -420,6 +557,15 @@ pub fn App(api_base: Option<String>) -> Element {
                     Err(error) => set_status_error(app_state, error),
                 }
 
+                match fetch_class_index(&api_base_value).await {
+                    Ok(entries) => {
+                        let effects =
+                            reduce_state(app_state, AppAction::ClassIndexLoaded(entries));
+                        run_effects(api_base_value.clone(), app_state, effects);
+                    }
+                    Err(error) => set_status_error(app_state, error),
+                }
+
                 tree_loading.set(false);
             });
         });
@@ -459,14 +605,25 @@ pub fn App(api_base: Option<String>) -> Element {
         });
     }
 
-    // children_map rebuilds only when flat_nodes changes; visible_rows rebuilds
-    // when nodes or expanded state changes.  Both are pure client-side, no I/O.
+    // children_map rebuilds only when flat_nodes changes; visible_rows/filtered_rows rebuild
+    // when nodes, expanded state, or filter changes. All are pure client-side, no I/O.
     let children_map = use_memo(move || build_children_map(&flat_nodes.read()));
     let visible_rows = use_memo(move || {
         let nodes = flat_nodes.read();
         let map = children_map.read();
         let expanded = expanded_dirs.read();
-        compute_visible_rows(&nodes, &map, &expanded)
+        let state = app_state();
+        if state.filter_classes.is_empty() {
+            compute_visible_rows(&nodes, &map, &expanded)
+        } else {
+            compute_filtered_rows(
+                &nodes,
+                &map,
+                &state.class_index,
+                &state.filter_classes,
+                state.filter_mode,
+            )
+        }
     });
 
     let state_value = app_state();
@@ -517,6 +674,25 @@ pub fn App(api_base: Option<String>) -> Element {
             aside { class: "panel",
                 div { class: "panel-inner",
                     div { class: "section-title", "Dataset" }
+                    ClassFilterBar {
+                        class_map: state_value.class_map.clone(),
+                        color_map: color_map(),
+                        filter_classes: state_value.filter_classes.clone(),
+                        filter_mode: state_value.filter_mode,
+                        ontoggle_class: move |class_id: u32| {
+                            let selected = !app_state().filter_classes.contains(&class_id);
+                            let effects = reduce_state(app_state, AppAction::SetFilterClass { class_id, selected });
+                            run_effects(api_base(), app_state, effects);
+                        },
+                        onset_mode: move |mode: FilterMode| {
+                            let effects = reduce_state(app_state, AppAction::SetFilterMode(mode));
+                            run_effects(api_base(), app_state, effects);
+                        },
+                        onclear: move |_| {
+                            let effects = reduce_state(app_state, AppAction::ClearClassFilter);
+                            run_effects(api_base(), app_state, effects);
+                        },
+                    }
                     if tree_loading() {
                         div { class: "message info", "Loading dataset tree..." }
                     }
@@ -627,6 +803,30 @@ pub fn App(api_base: Option<String>) -> Element {
                     span { "Dimensions: {dimensions_text}" }
                     span { "Objects: {state_value.status.object_count}" }
                     span { "Mode: {mode_text}" }
+                    if !state_value.filter_classes.is_empty() {
+                        {
+                            let filter_names = state_value.filter_classes.iter()
+                                .map(|id| state_value.class_map.get(id)
+                                    .cloned()
+                                    .unwrap_or_else(|| format!("class {id}")))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            rsx! {
+                                span {
+                                    class: "status-pill filter-active-badge",
+                                    "Filter: {filter_names}"
+                                    button {
+                                        style: "background:transparent;border:none;color:inherit;cursor:pointer;padding:0 0 0 6px;",
+                                        onclick: move |_| {
+                                            let effects = reduce_state(app_state, AppAction::ClearClassFilter);
+                                            run_effects(api_base(), app_state, effects);
+                                        },
+                                        "×"
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -688,6 +888,85 @@ pub fn App(api_base: Option<String>) -> Element {
                                     let effects = reduce_state(app_state, AppAction::DeleteLabel { label_index: index });
                                     run_effects(api_base(), app_state, effects);
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn ClassFilterBar(
+    class_map: HashMap<u32, String>,
+    color_map: HashMap<u32, (u8, u8, u8)>,
+    filter_classes: BTreeSet<u32>,
+    filter_mode: FilterMode,
+    ontoggle_class: EventHandler<u32>,
+    onset_mode: EventHandler<FilterMode>,
+    onclear: EventHandler<()>,
+) -> Element {
+    if class_map.is_empty() {
+        return rsx! { Fragment {} };
+    }
+
+    let is_active = !filter_classes.is_empty();
+    let mut sorted_class_ids: Vec<u32> = class_map.keys().copied().collect();
+    sorted_class_ids.sort_unstable();
+
+    rsx! {
+        div { class: "filter-bar",
+            div { class: "filter-bar-header",
+                span { class: "filter-label", "Filter" }
+                if is_active {
+                    button {
+                        class: "filter-clear",
+                        onclick: move |_| onclear.call(()),
+                        "× Clear"
+                    }
+                }
+            }
+            div { class: "filter-mode",
+                label {
+                    input {
+                        r#type: "radio",
+                        name: "filter-mode",
+                        checked: filter_mode == FilterMode::Any,
+                        onchange: move |_| onset_mode.call(FilterMode::Any),
+                    }
+                    " Any"
+                }
+                label {
+                    input {
+                        r#type: "radio",
+                        name: "filter-mode",
+                        checked: filter_mode == FilterMode::All,
+                        onchange: move |_| onset_mode.call(FilterMode::All),
+                    }
+                    " All"
+                }
+            }
+            div { class: "filter-chips",
+                for class_id in sorted_class_ids.into_iter() {
+                    {
+                        let name = class_map.get(&class_id).cloned().unwrap_or_else(|| format!("class {class_id}"));
+                        let is_selected = filter_classes.contains(&class_id);
+                        let rgb = color_map.get(&class_id).copied().unwrap_or_else(|| yoda_core::default_color_for_class(class_id));
+                        let color_str = format!("rgb({},{},{})", rgb.0, rgb.1, rgb.2);
+                        let chip_style = if is_selected {
+                            format!("border-color: {color_str}; background: {color_str}22;")
+                        } else {
+                            String::new()
+                        };
+                        rsx! {
+                            button {
+                                key: "chip-{class_id}",
+                                class: if is_selected { "filter-chip active" } else { "filter-chip" },
+                                style: chip_style,
+                                onclick: move |_| ontoggle_class.call(class_id),
+                                div { class: "chip-swatch", style: "background: {color_str}" }
+                                span { "{name}" }
                             }
                         }
                     }
@@ -949,6 +1228,10 @@ async fn fetch_color_map(api_base: &str) -> Result<HashMap<u32, (u8, u8, u8)>, S
         .into_iter()
         .map(|(class_id, rgb)| (class_id, (rgb[0], rgb[1], rgb[2])))
         .collect())
+}
+
+async fn fetch_class_index(api_base: &str) -> Result<HashMap<String, Vec<u32>>, String> {
+    Ok(fetch_json::<ClassIndexResponse>(api_base, "/api/class-index").await?.entries)
 }
 
 async fn save_labels(api_base: &str, image_path: &str, labels: Vec<LabelObject>) -> Result<(), String> {
