@@ -10,6 +10,7 @@ dioxus.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+time.workspace = true
 urlencoding.workspace = true
 web-sys.workspace = true
 yoda-app = { path = "../yoda-app" }
