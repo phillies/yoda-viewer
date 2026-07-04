@@ -11,11 +11,11 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
 authors = ["Phil Lies <phil@lies.io>"]
-repository = "https://example.invalid/yoda"
+repository = "https://github.com/phillies/yoda-viewer"
 
 [workspace.dependencies]
 anyhow = "1.0"
@@ -50,6 +50,8 @@ tokio = { version = "1.48", features = [
 tower-http = { version = "0.6", features = ["fs", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+# Pinned due to cookie 0.18.1 + time 0.3.52 API mismatch (E0061 in cookie parse).
+time = "=0.3.51"
 urlencoding = "2.1"
 web-sys = { version = "0.3", features = ["Window", "Location"] }
 

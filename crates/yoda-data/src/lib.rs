@@ -1,3 +1,9 @@
+mod class_index;
+
+pub use class_index::{
+    ClassIndex, FilterMode, extract_class_ids, extract_class_ids_from_label_file,
+};
+
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -5,8 +11,8 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use yoda_config::{load_class_map, load_color_map, ConfigError, YoDaSettings};
-use yoda_core::{parse_yolo_labels, write_yolo_labels, LabelError, LabelObject};
+use yoda_config::{ConfigError, YoDaSettings, load_class_map, load_color_map};
+use yoda_core::{LabelError, LabelObject, parse_yolo_labels, write_yolo_labels};
 
 pub const LAZY_PLACEHOLDER_SUFFIX: &str = "/__lazy__";
 
@@ -76,11 +82,21 @@ pub enum RepositoryError {
 pub trait DatasetRepository {
     fn list_root_nodes(&self) -> Result<Vec<TreeNode>, RepositoryError>;
     fn expand_directory(&self, path: &Path) -> Result<Vec<TreeNode>, RepositoryError>;
-    fn label_path_for_image(&self, image_path: &Path) -> Result<PathBuf, RepositoryError>;
+    fn label_path_for_image(
+        &self,
+        image_path: &Path,
+    ) -> Result<PathBuf, RepositoryError>;
     fn image_dimensions(&self, path: &Path) -> Result<(u32, u32), RepositoryError>;
     fn image_bytes(&self, path: &Path) -> Result<Vec<u8>, RepositoryError>;
-    fn load_labels(&self, image_path: &Path) -> Result<Vec<LabelObject>, RepositoryError>;
-    fn save_labels(&self, image_path: &Path, labels: &[LabelObject]) -> Result<(), RepositoryError>;
+    fn load_labels(
+        &self,
+        image_path: &Path,
+    ) -> Result<Vec<LabelObject>, RepositoryError>;
+    fn save_labels(
+        &self,
+        image_path: &Path,
+        labels: &[LabelObject],
+    ) -> Result<(), RepositoryError>;
     fn class_map(&self) -> Result<HashMap<u32, String>, RepositoryError>;
     fn color_map(&self) -> Result<HashMap<u32, (u8, u8, u8)>, RepositoryError>;
 }
@@ -103,7 +119,10 @@ impl LocalDatasetRepository {
         &self.settings.label_base_path
     }
 
-    pub fn label_path_for_image(&self, image_path: &Path) -> Result<PathBuf, RepositoryError> {
+    pub fn label_path_for_image(
+        &self,
+        image_path: &Path,
+    ) -> Result<PathBuf, RepositoryError> {
         map_image_to_label_path(image_path, self.image_root(), self.label_root())
     }
 }
@@ -117,7 +136,10 @@ impl DatasetRepository for LocalDatasetRepository {
         Ok(get_dir_children(path))
     }
 
-    fn label_path_for_image(&self, image_path: &Path) -> Result<PathBuf, RepositoryError> {
+    fn label_path_for_image(
+        &self,
+        image_path: &Path,
+    ) -> Result<PathBuf, RepositoryError> {
         LocalDatasetRepository::label_path_for_image(self, image_path)
     }
 
@@ -129,13 +151,20 @@ impl DatasetRepository for LocalDatasetRepository {
         Ok(fs::read(path)?)
     }
 
-    fn load_labels(&self, image_path: &Path) -> Result<Vec<LabelObject>, RepositoryError> {
+    fn load_labels(
+        &self,
+        image_path: &Path,
+    ) -> Result<Vec<LabelObject>, RepositoryError> {
         let label_path = self.label_path_for_image(image_path)?;
         let (width, height) = self.image_dimensions(image_path)?;
         Ok(parse_yolo_labels(label_path, width, height))
     }
 
-    fn save_labels(&self, image_path: &Path, labels: &[LabelObject]) -> Result<(), RepositoryError> {
+    fn save_labels(
+        &self,
+        image_path: &Path,
+        labels: &[LabelObject],
+    ) -> Result<(), RepositoryError> {
         let label_path = self.label_path_for_image(image_path)?;
         write_yolo_labels(label_path, labels)?;
         Ok(())
@@ -156,10 +185,7 @@ pub fn get_files(base_dir: &Path) -> Vec<PathBuf> {
         return Vec::new();
     }
 
-    walk_dir(base_dir)
-        .into_iter()
-        .filter(|path| path.is_file())
-        .collect()
+    walk_dir(base_dir).into_iter().filter(|path| path.is_file()).collect()
 }
 
 pub fn get_dir_children(path: &Path) -> Vec<TreeNode> {
@@ -210,12 +236,12 @@ pub fn map_image_to_label_path(
     image_root: &Path,
     label_root: &Path,
 ) -> Result<PathBuf, RepositoryError> {
-    let relative = image_path
-        .strip_prefix(image_root)
-        .map_err(|_| RepositoryError::ImageOutsideRoot {
+    let relative = image_path.strip_prefix(image_root).map_err(|_| {
+        RepositoryError::ImageOutsideRoot {
             image_path: image_path.to_path_buf(),
             image_root: image_root.to_path_buf(),
-        })?;
+        }
+    })?;
 
     Ok(label_root.join(relative).with_extension("txt"))
 }
@@ -260,12 +286,7 @@ fn tree_node_for_path(path: &Path) -> Option<TreeNode> {
         return None;
     }
 
-    Some(TreeNode {
-        id,
-        label,
-        children: Vec::new(),
-        icon: NodeIcon::Image,
-    })
+    Some(TreeNode { id, label, children: Vec::new(), icon: NodeIcon::Image })
 }
 
 // ─── Flat index scan ─────────────────────────────────────────────────────────
@@ -282,10 +303,7 @@ pub fn scan_dataset_tree(root: &Path) -> FlatIndex {
     if root.is_dir() {
         scan_dir_flat(root, root, None, &mut nodes, &mut image_count);
     }
-    FlatIndex {
-        nodes: nodes.into(),
-        image_count,
-    }
+    FlatIndex { nodes: nodes.into(), image_count }
 }
 
 fn scan_dir_flat(
@@ -321,7 +339,9 @@ fn scan_dir_flat(
     });
 
     for (entry_path, is_dir, _) in items_with_keys {
-        let Some(name) = entry_path.file_name().and_then(|n| n.to_str()).map(str::to_owned) else {
+        let Some(name) =
+            entry_path.file_name().and_then(|n| n.to_str()).map(str::to_owned)
+        else {
             continue;
         };
 
@@ -361,7 +381,9 @@ fn dataset_relative_path(root: &Path, path: &Path) -> String {
         .unwrap_or(path)
         .components()
         .filter_map(|component| match component {
-            std::path::Component::Normal(value) => Some(value.to_string_lossy().into_owned()),
+            std::path::Component::Normal(value) => {
+                Some(value.to_string_lossy().into_owned())
+            }
             _ => None,
         })
         .collect::<Vec<_>>()
@@ -370,9 +392,9 @@ fn dataset_relative_path(root: &Path, path: &Path) -> String {
 
 #[cfg(test)]
 mod scan_tests {
+    use super::{NodeKind, scan_dataset_tree};
     use std::fs;
     use tempfile::TempDir;
-    use super::{scan_dataset_tree, NodeKind};
 
     fn make_dataset(layout: &[(&str, &[u8])]) -> TempDir {
         let tmp = TempDir::new().expect("tempdir");
@@ -405,10 +427,7 @@ mod scan_tests {
 
     #[test]
     fn scan_id_matches_index() {
-        let tmp = make_dataset(&[
-            ("train/a.jpg", b""),
-            ("train/b.jpg", b""),
-        ]);
+        let tmp = make_dataset(&[("train/a.jpg", b""), ("train/b.jpg", b"")]);
         let idx = scan_dataset_tree(tmp.path());
         for (i, node) in idx.nodes.iter().enumerate() {
             assert_eq!(node.id as usize, i, "node.id must equal its position");
@@ -417,14 +436,16 @@ mod scan_tests {
 
     #[test]
     fn scan_folders_before_images() {
-        let tmp = make_dataset(&[
-            ("b_folder/x.jpg", b""),
-            ("a.jpg", b""),
-        ]);
+        let tmp = make_dataset(&[("b_folder/x.jpg", b""), ("a.jpg", b"")]);
         let idx = scan_dataset_tree(tmp.path());
         // "b_folder" (a Folder) should appear before "a.jpg" (an Image)
-        let folder_pos = idx.nodes.iter().position(|n| n.kind == NodeKind::Folder).expect("folder");
-        let image_pos  = idx.nodes.iter().position(|n| n.kind == NodeKind::Image && n.parent_id.is_none()).expect("root image");
+        let folder_pos =
+            idx.nodes.iter().position(|n| n.kind == NodeKind::Folder).expect("folder");
+        let image_pos = idx
+            .nodes
+            .iter()
+            .position(|n| n.kind == NodeKind::Image && n.parent_id.is_none())
+            .expect("root image");
         assert!(folder_pos < image_pos, "folders must sort before images");
     }
 }
@@ -438,8 +459,8 @@ mod tests {
     use yoda_config::YoDaSettings;
 
     use super::{
+        DatasetRepository, LAZY_PLACEHOLDER_SUFFIX, LocalDatasetRepository, NodeIcon,
         get_dir_children, get_file_tree, get_files, map_image_to_label_path,
-        DatasetRepository, LocalDatasetRepository, NodeIcon, LAZY_PLACEHOLDER_SUFFIX,
     };
 
     fn sample_dataset() -> TempDir {
@@ -457,7 +478,8 @@ mod tests {
             "0 0.1 0.2 0.3 0.2 0.3 0.8 0.1 0.8 0.05 0.5\n2 0.5 0.5 0.7 0.5 0.7 0.9 0.5 0.9\n",
         )
         .expect("write labels");
-        fs::write(label_dir.join("test2.txt"), "1 0.5 0.5 0.4 0.6\n").expect("write labels");
+        fs::write(label_dir.join("test2.txt"), "1 0.5 0.5 0.4 0.6\n")
+            .expect("write labels");
 
         temp
     }
@@ -661,7 +683,9 @@ mod tests {
         .expect("map example_data path");
         assert_eq!(
             mapped,
-            Path::new("example_data/labels/test/car4_jpg.rf.8978131a7b03be689c244641e42e1307.txt")
+            Path::new(
+                "example_data/labels/test/car4_jpg.rf.8978131a7b03be689c244641e42e1307.txt"
+            )
         );
     }
 }

@@ -4,9 +4,12 @@ use std::path::PathBuf;
 use dioxus::prelude::*;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use yoda_app::{apply_action, AccessMode, AppAction, AppEffect, AppState, LoadedImage};
-use yoda_core::{render_labels_to_svg, LabelObject, RenderOptions};
-use yoda_data::{FlatNode, NodeIcon, NodeKind};
+use yoda_app::{
+    AccessMode, AppAction, AppEffect, AppState, InteractionMode, LoadedImage,
+    apply_action,
+};
+use yoda_core::{LabelObject, LabelType, Point, RenderOptions, render_labels_to_svg};
+use yoda_data::{FilterMode, FlatNode, NodeIcon, NodeKind};
 
 pub const PAN_ZOOM_SCRIPT: &str = r#"
 (function () {
@@ -124,6 +127,10 @@ pub const PAN_ZOOM_SCRIPT: &str = r#"
             if (event.button !== 0 || !updateStage()) {
                 return;
             }
+            // Skip drag in polygon-draw mode – clicks are handled by the SVG draw overlay.
+            if (controller.container && controller.container.dataset.drawMode === 'true') {
+                return;
+            }
 
             controller.dragging = true;
             controller.lastX = event.clientX;
@@ -145,6 +152,10 @@ pub const PAN_ZOOM_SCRIPT: &str = r#"
         };
 
         const onDoubleClick = function () {
+            // In edit mode, double-click is reserved for label selection — skip view reset.
+            if (controller.container && controller.container.dataset.editMode === 'unlocked') {
+                return;
+            }
             if (!updateStage()) {
                 return;
             }
@@ -200,6 +211,31 @@ pub const PAN_ZOOM_SCRIPT: &str = r#"
 })();
 "#;
 
+pub const DRAW_SCRIPT: &str = r#"
+(function () {
+    if (window.__yodaDrawSetup) { return; }
+    window.__yodaDrawSetup = true;
+
+    // Route keyboard shortcuts to hidden Dioxus buttons so they work without
+    // requiring explicit focus on any particular element.
+    document.addEventListener('keydown', function (event) {
+        const tag = ((event.target || {}).tagName || '').toUpperCase();
+        if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') { return; }
+
+        if (event.key === 'Delete' || event.key === 'Backspace') {
+            const btn = document.getElementById('yoda-key-delete');
+            if (btn) { event.preventDefault(); btn.click(); }
+        } else if (event.key === 'Escape') {
+            const btn = document.getElementById('yoda-key-escape');
+            if (btn) { event.preventDefault(); btn.click(); }
+        } else if (event.key === 'Enter') {
+            const btn = document.getElementById('yoda-key-enter');
+            if (btn) { event.preventDefault(); btn.click(); }
+        }
+    });
+})();
+"#;
+
 const APP_CSS: &str = r#"
 :root {
     color-scheme: dark;
@@ -225,6 +261,7 @@ button, select { font: inherit; }
 .panel-inner { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .section-title { padding: 16px 18px 10px; font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); }
 .tree-scroll, .side-scroll { overflow: auto; min-height: 0; padding: 0 10px 14px; }
+.classes-scroll, .objects-scroll { overflow: auto; min-height: 0; max-height: 50%; padding: 0 10px 14px; }
 .tree-node { margin-left: var(--indent); }
 .tree-row { width: 100%; display: flex; align-items: center; gap: 8px; border: 1px solid transparent; background: transparent; color: inherit; padding: 8px 10px; border-radius: 10px; text-align: left; cursor: pointer; }
 .tree-row:hover { background: rgba(233,223,200,0.06); border-color: rgba(233,223,200,0.08); }
@@ -251,14 +288,14 @@ button, select { font: inherit; }
 .empty-state h2 { margin: 0 0 8px; color: var(--text); font-size: 28px; }
 .empty-state p { margin: 0; line-height: 1.5; }
 .status-bar { display: flex; flex-wrap: wrap; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--line); color: var(--muted); background: rgba(22, 22, 17, 0.82); font-size: 12px; }
-.legend-item, .object-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; margin-bottom: 8px; border-radius: 14px; background: rgba(233,223,200,0.04); border: 1px solid transparent; }
+.legend-item, .object-row { display: flex; align-items: center; gap: 6px; padding: 5px 8px; margin-bottom: 4px; border-radius: 8px; background: rgba(233,223,200,0.04); border: 1px solid transparent; font-size: 12px; }
 .object-row.selected { border-color: rgba(127, 159, 75, 0.42); background: var(--accent-soft); }
-.swatch { width: 12px; height: 12px; border-radius: 999px; flex: none; }
-.legend-name, .object-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.legend-item button, .object-row button, .object-row select { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 7px 10px; }
+.swatch { width: 8px; height: 8px; border-radius: 999px; flex: none; }
+.legend-name, .object-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.legend-item button, .object-row button, .object-row select { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 3px 7px; font-size: 11px; }
 .object-row button.ghost { background: transparent; }
 .object-row button.delete { color: #ff8e8e; }
-.stack-gap { height: 10px; }
+.stack-gap { height: 4px; }
 .message { margin: 8px 16px 0; padding: 10px 12px; border-radius: 12px; font-size: 13px; }
 .message.error { background: rgba(255, 88, 88, 0.12); border: 1px solid rgba(255, 88, 88, 0.2); color: #ff9f9f; }
 .message.info { background: rgba(127, 159, 75, 0.18); border: 1px solid rgba(127, 159, 75, 0.34); color: #d8e7ba; }
@@ -272,7 +309,25 @@ button, select { font: inherit; }
   .panel.right { border-top: 1px solid var(--line); }
   .canvas img.main-image { max-height: 50vh; }
 }
+.filter-bar { padding: 8px 10px 4px; border-bottom: 1px solid var(--line); }
+.filter-bar-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.filter-label { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+.filter-clear { background: transparent; color: var(--warn); border: 1px solid rgba(207,156,90,0.3); border-radius: 8px; padding: 3px 8px; font-size: 11px; cursor: pointer; }
+.filter-clear:hover { background: rgba(207,156,90,0.12); }
+.filter-mode { display: flex; gap: 10px; margin-bottom: 6px; font-size: 12px; color: var(--muted); }
+.filter-mode label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+.filter-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.filter-chip { display: inline-flex; align-items: center; gap: 6px; background: rgba(233,223,200,0.04); border: 1px solid var(--line); border-radius: 20px; padding: 4px 10px; font-size: 12px; cursor: pointer; color: inherit; }
+.filter-chip:hover { background: rgba(233,223,200,0.08); }
+.filter-chip.active { border-color: var(--accent); background: var(--accent-soft); }
+.chip-swatch { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.filter-active-badge { color: var(--accent); border-color: rgba(127, 159, 75, 0.42); }
+.draw-hint { color: var(--muted); font-size: 12px; padding: 4px 8px; border-radius: 8px; background: rgba(233,223,200,0.04); border: 1px dashed var(--line); }
+.draw-vertex-count { color: var(--good); font-size: 12px; padding: 4px 8px; font-variant-numeric: tabular-nums; }
 "#;
+
+/// Radius in image-pixel space of the "click here to close" zone on the first draw vertex.
+const CLOSE_ZONE_RADIUS: f32 = 18.0;
 
 #[derive(Debug, Clone, Deserialize)]
 struct LabelsResponse {
@@ -291,6 +346,13 @@ struct ClassMapResponse {
 #[derive(Debug, Clone, Deserialize)]
 struct ColorMapResponse {
     color_map: HashMap<u32, [u8; 3]>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ClassIndexResponse {
+    entries: HashMap<String, Vec<u32>>,
+    #[allow(dead_code)]
+    all_class_ids: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -346,8 +408,8 @@ fn collect_visible_rows(
     for &child_id in children_ids {
         let Some(node) = nodes.get(child_id as usize) else { continue };
         let is_expanded = node.kind == NodeKind::Folder && expanded.contains(&child_id);
-        let has_children = node.kind == NodeKind::Folder
-            && children_map.contains_key(&Some(child_id));
+        let has_children =
+            node.kind == NodeKind::Folder && children_map.contains_key(&Some(child_id));
         result.push(VisibleRow {
             id: child_id,
             name: node.name.clone(),
@@ -358,7 +420,14 @@ fn collect_visible_rows(
             is_expanded,
         });
         if is_expanded {
-            collect_visible_rows(Some(child_id), depth + 1, nodes, children_map, expanded, result);
+            collect_visible_rows(
+                Some(child_id),
+                depth + 1,
+                nodes,
+                children_map,
+                expanded,
+                result,
+            );
         }
     }
 }
@@ -371,6 +440,134 @@ fn compute_visible_rows(
 ) -> Vec<VisibleRow> {
     let mut result = Vec::new();
     collect_visible_rows(None, 0, nodes, children_map, expanded, &mut result);
+    result
+}
+
+/// Collect rows for the filtered tree view.
+///
+/// When a class filter is active, only folders that contain matching images
+/// (directly or transitively) are shown. Empty folders are hidden. Expand/collapse
+/// state is respected: children are only rendered for expanded folders.
+fn collect_filtered_rows(
+    parent_id: Option<u32>,
+    depth: usize,
+    nodes: &[FlatNode],
+    children_map: &HashMap<Option<u32>, Vec<u32>>,
+    matching_images: &std::collections::HashSet<u32>,
+    matching_folders: &std::collections::HashSet<u32>,
+    expanded_dirs: &std::collections::BTreeSet<u32>,
+    result: &mut Vec<VisibleRow>,
+) {
+    let Some(children_ids) = children_map.get(&parent_id) else { return };
+    for &child_id in children_ids {
+        let Some(node) = nodes.get(child_id as usize) else { continue };
+        match node.kind {
+            NodeKind::Image => {
+                if matching_images.contains(&child_id) {
+                    result.push(VisibleRow {
+                        id: child_id,
+                        name: node.name.clone(),
+                        kind: NodeKind::Image,
+                        path: node.path.clone(),
+                        depth,
+                        has_children: false,
+                        is_expanded: false,
+                    });
+                }
+            }
+            NodeKind::Folder => {
+                if matching_folders.contains(&child_id) {
+                    let has_children = children_map.contains_key(&Some(child_id));
+                    let is_expanded = expanded_dirs.contains(&child_id);
+                    result.push(VisibleRow {
+                        id: child_id,
+                        name: node.name.clone(),
+                        kind: NodeKind::Folder,
+                        path: node.path.clone(),
+                        depth,
+                        has_children,
+                        is_expanded,
+                    });
+                    if is_expanded {
+                        collect_filtered_rows(
+                            Some(child_id),
+                            depth + 1,
+                            nodes,
+                            children_map,
+                            matching_images,
+                            matching_folders,
+                            expanded_dirs,
+                            result,
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Compute the tree rows shown when a class filter is active.
+fn compute_filtered_rows(
+    nodes: &[FlatNode],
+    children_map: &HashMap<Option<u32>, Vec<u32>>,
+    class_index: &HashMap<String, Vec<u32>>,
+    filter_classes: &BTreeSet<u32>,
+    filter_mode: FilterMode,
+    expanded_dirs: &std::collections::BTreeSet<u32>,
+) -> Vec<VisibleRow> {
+    use std::collections::HashSet;
+
+    // Collect matching image node IDs.
+    let matching_image_ids: HashSet<u32> = nodes
+        .iter()
+        .filter(|node| {
+            if node.kind != NodeKind::Image {
+                return false;
+            }
+            let Some(class_ids) = class_index.get(&node.path) else {
+                return false;
+            };
+            match filter_mode {
+                FilterMode::Any => {
+                    class_ids.iter().any(|id| filter_classes.contains(id))
+                }
+                FilterMode::All => {
+                    filter_classes.iter().all(|id| class_ids.contains(id))
+                }
+            }
+        })
+        .map(|n| n.id)
+        .collect();
+
+    // Collect all ancestor folder IDs for those images.
+    let mut matching_folder_ids: HashSet<u32> = HashSet::new();
+    for &image_id in &matching_image_ids {
+        let mut current = image_id;
+        loop {
+            let Some(node) = nodes.get(current as usize) else { break };
+            match node.parent_id {
+                Some(parent_id) => {
+                    if !matching_folder_ids.insert(parent_id) {
+                        break; // already processed this ancestor chain
+                    }
+                    current = parent_id;
+                }
+                None => break,
+            }
+        }
+    }
+
+    let mut result = Vec::new();
+    collect_filtered_rows(
+        None,
+        0,
+        nodes,
+        children_map,
+        &matching_image_ids,
+        &matching_folder_ids,
+        expanded_dirs,
+        &mut result,
+    );
     result
 }
 
@@ -409,7 +606,10 @@ pub fn App(api_base: Option<String>) -> Element {
 
                 match fetch_class_map(&api_base_value).await {
                     Ok(class_map) => {
-                        let effects = reduce_state(app_state, AppAction::ClassMapLoaded(class_map));
+                        let effects = reduce_state(
+                            app_state,
+                            AppAction::ClassMapLoaded(class_map),
+                        );
                         run_effects(api_base_value.clone(), app_state, effects);
                     }
                     Err(error) => set_status_error(app_state, error),
@@ -417,6 +617,17 @@ pub fn App(api_base: Option<String>) -> Element {
 
                 match fetch_color_map(&api_base_value).await {
                     Ok(map) => color_map.set(map),
+                    Err(error) => set_status_error(app_state, error),
+                }
+
+                match fetch_class_index(&api_base_value).await {
+                    Ok(entries) => {
+                        let effects = reduce_state(
+                            app_state,
+                            AppAction::ClassIndexLoaded(entries),
+                        );
+                        run_effects(api_base_value.clone(), app_state, effects);
+                    }
                     Err(error) => set_status_error(app_state, error),
                 }
 
@@ -449,7 +660,8 @@ pub fn App(api_base: Option<String>) -> Element {
                             },
                             labels: response.labels,
                         };
-                        let effects = reduce_state(app_state, AppAction::ImageLoaded(loaded));
+                        let effects =
+                            reduce_state(app_state, AppAction::ImageLoaded(loaded));
                         run_effects(api_base_value.clone(), app_state, effects);
                     }
                     Err(error) => set_status_error(app_state, error),
@@ -459,19 +671,32 @@ pub fn App(api_base: Option<String>) -> Element {
         });
     }
 
-    // children_map rebuilds only when flat_nodes changes; visible_rows rebuilds
-    // when nodes or expanded state changes.  Both are pure client-side, no I/O.
+    // children_map rebuilds only when flat_nodes changes; visible_rows/filtered_rows rebuild
+    // when nodes, expanded state, or filter changes. All are pure client-side, no I/O.
     let children_map = use_memo(move || build_children_map(&flat_nodes.read()));
     let visible_rows = use_memo(move || {
         let nodes = flat_nodes.read();
         let map = children_map.read();
         let expanded = expanded_dirs.read();
-        compute_visible_rows(&nodes, &map, &expanded)
+        let state = app_state();
+        if state.filter_classes.is_empty() {
+            compute_visible_rows(&nodes, &map, &expanded)
+        } else {
+            compute_filtered_rows(
+                &nodes,
+                &map,
+                &state.class_index,
+                &state.filter_classes,
+                state.filter_mode,
+                &expanded,
+            )
+        }
     });
 
     let state_value = app_state();
     let visible_labels = state_value.visible_labels();
-    let overlay_data_uri = render_overlay_data_uri(&state_value, &color_map(), &visible_labels);
+    let overlay_data_uri =
+        render_overlay_data_uri(&state_value, &color_map(), &visible_labels);
     let selected_image_src = state_value
         .current_image_path
         .as_ref()
@@ -497,7 +722,13 @@ pub fn App(api_base: Option<String>) -> Element {
             )
         })
         .collect::<Vec<_>>();
-    let status_class = if state_value.is_locked() { "status-pill locked" } else { "status-pill unlocked" };
+    let status_class = if state_value.is_locked() {
+        "status-pill locked"
+    } else {
+        "status-pill unlocked"
+    };
+    let is_locked = state_value.is_locked();
+    let is_unlocked = !is_locked;
     let image_name = state_value
         .current_image_path
         .as_ref()
@@ -513,10 +744,30 @@ pub fn App(api_base: Option<String>) -> Element {
     rsx! {
         document::Style { "{APP_CSS}" }
         script { "{PAN_ZOOM_SCRIPT}" }
+        script { "{DRAW_SCRIPT}" }
         main { class: "app-shell",
             aside { class: "panel",
                 div { class: "panel-inner",
                     div { class: "section-title", "Dataset" }
+                    ClassFilterBar {
+                        class_map: state_value.class_map.clone(),
+                        color_map: color_map(),
+                        filter_classes: state_value.filter_classes.clone(),
+                        filter_mode: state_value.filter_mode,
+                        ontoggle_class: move |class_id: u32| {
+                            let selected = !app_state().filter_classes.contains(&class_id);
+                            let effects = reduce_state(app_state, AppAction::SetFilterClass { class_id, selected });
+                            run_effects(api_base(), app_state, effects);
+                        },
+                        onset_mode: move |mode: FilterMode| {
+                            let effects = reduce_state(app_state, AppAction::SetFilterMode(mode));
+                            run_effects(api_base(), app_state, effects);
+                        },
+                        onclear: move |_| {
+                            let effects = reduce_state(app_state, AppAction::ClearClassFilter);
+                            run_effects(api_base(), app_state, effects);
+                        },
+                    }
                     if tree_loading() {
                         div { class: "message info", "Loading dataset tree..." }
                     }
@@ -582,7 +833,7 @@ pub fn App(api_base: Option<String>) -> Element {
                     div { class: "toolbar-group",
                         button {
                             onclick: move |_| {
-                                let next_mode = if state_value.is_locked() { AccessMode::Unlocked } else { AccessMode::Locked };
+                                let next_mode = if app_state().is_locked() { AccessMode::Unlocked } else { AccessMode::Locked };
                                 let effects = reduce_state(app_state, AppAction::SetAccessMode(next_mode));
                                 run_effects(api_base(), app_state, effects);
                             },
@@ -590,8 +841,82 @@ pub fn App(api_base: Option<String>) -> Element {
                         }
                         span { class: status_class, if state_value.is_locked() { "Locked" } else { "Unlocked" } }
                     }
+                    if is_unlocked {
+                        div { class: "toolbar-group",
+                            button {
+                                class: if state_value.interaction_mode == InteractionMode::Draw { "active" } else { "" },
+                                onclick: move |_| {
+                                    let next = if app_state().interaction_mode == InteractionMode::Draw {
+                                        InteractionMode::Edit
+                                    } else {
+                                        InteractionMode::Draw
+                                    };
+                                    let effects = reduce_state(app_state, AppAction::SetInteractionMode(next));
+                                    run_effects(api_base(), app_state, effects);
+                                },
+                                "Draw Polygon"
+                            }
+                            select {
+                                value: "{state_value.drawing_class_id}",
+                                onchange: move |event| {
+                                    if let Ok(class_id) = event.value().parse::<u32>() {
+                                        let effects = reduce_state(app_state, AppAction::SetDrawClassId(class_id));
+                                        run_effects(api_base(), app_state, effects);
+                                    }
+                                },
+                                for (class_id, label) in class_options.iter().cloned() {
+                                    option { value: "{class_id}", "{label}" }
+                                }
+                            }
+                        }
+                        if state_value.interaction_mode == InteractionMode::Draw {
+                            span { class: "draw-vertex-count",
+                                "{state_value.drawing_vertices.len()} pts"
+                            }
+                            button {
+                                disabled: state_value.drawing_vertices.len() < 3,
+                                onclick: move |_| {
+                                    let effects = reduce_state(app_state, AppAction::FinishDrawing);
+                                    run_effects(api_base(), app_state, effects);
+                                },
+                                "Finish (Enter)"
+                            }
+                            button {
+                                onclick: move |_| {
+                                    let effects = reduce_state(app_state, AppAction::CancelDrawing);
+                                    run_effects(api_base(), app_state, effects);
+                                },
+                                "Cancel (Esc)"
+                            }
+                        }
+                    }
                     if image_loading() {
                         span { class: "status-pill", "Loading image..." }
+                    }
+                    // Hidden virtual buttons for global keyboard shortcuts (clicked by DRAW_SCRIPT).
+                    button {
+                        id: "yoda-key-delete",
+                        style: "display:none;",
+                        onclick: move |_| {
+                            let effects = reduce_state(app_state, AppAction::DeleteSelectedLabel);
+                            run_effects(api_base(), app_state, effects);
+                        }
+                    }
+                    button {
+                        id: "yoda-key-escape",
+                        style: "display:none;",
+                        onclick: move |_| {
+                            let effects = reduce_state(app_state, AppAction::CancelDrawing);
+                            run_effects(api_base(), app_state, effects);
+                        }
+                    }
+                    button {
+                        id: "yoda-key-enter",
+                        style: "display:none;",
+                        onclick: move |_| {
+                            let effects = reduce_state(app_state, AppAction::FinishDrawing);
+                            run_effects(api_base(), app_state, effects);
+                        }
                     }
                 }
 
@@ -603,13 +928,40 @@ pub fn App(api_base: Option<String>) -> Element {
                 }
 
                 div { class: "viewport-wrap",
-                    div { class: "viewport", "data-panzoom-container": "true",
+                    div {
+                        class: "viewport",
+                        "data-panzoom-container": "true",
+                        "data-edit-mode": if is_locked { "locked" } else { "unlocked" },
+                        "data-draw-mode": if state_value.interaction_mode == InteractionMode::Draw { "true" } else { "false" },
                         if let Some(image_src) = selected_image_src {
                             div { class: "canvas-stage", "data-panzoom-stage": "true", "data-image-key": image_stage_key,
                                 div { class: "canvas",
                                     img { class: "main-image", src: image_src, alt: "Selected dataset image" }
                                     if let Some(overlay_src) = overlay_data_uri {
                                         img { class: "overlay-image", src: overlay_src, alt: "Label overlay" }
+                                    }
+                                    if is_unlocked {
+                                        if let Some(dims) = state_value.image_dimensions {
+                                            CanvasOverlay {
+                                                labels: visible_labels.clone(),
+                                                image_width: dims.width,
+                                                image_height: dims.height,
+                                                interaction_mode: state_value.interaction_mode,
+                                                drawing_vertices: state_value.drawing_vertices.clone(),
+                                                onselect: move |label_idx: usize| {
+                                                    let effects = reduce_state(app_state, AppAction::ToggleSelection { label_index: Some(label_idx) });
+                                                    run_effects(api_base(), app_state, effects);
+                                                },
+                                                onaddvertex: move |point: Point| {
+                                                    let effects = reduce_state(app_state, AppAction::AddDrawingVertex(point));
+                                                    run_effects(api_base(), app_state, effects);
+                                                },
+                                                onfinishdrawing: move |_| {
+                                                    let effects = reduce_state(app_state, AppAction::FinishDrawing);
+                                                    run_effects(api_base(), app_state, effects);
+                                                },
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -627,13 +979,37 @@ pub fn App(api_base: Option<String>) -> Element {
                     span { "Dimensions: {dimensions_text}" }
                     span { "Objects: {state_value.status.object_count}" }
                     span { "Mode: {mode_text}" }
+                    if !state_value.filter_classes.is_empty() {
+                        {
+                            let filter_names = state_value.filter_classes.iter()
+                                .map(|id| state_value.class_map.get(id)
+                                    .cloned()
+                                    .unwrap_or_else(|| format!("class {id}")))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            rsx! {
+                                span {
+                                    class: "status-pill filter-active-badge",
+                                    "Filter: {filter_names}"
+                                    button {
+                                        style: "background:transparent;border:none;color:inherit;cursor:pointer;padding:0 0 0 6px;",
+                                        onclick: move |_| {
+                                            let effects = reduce_state(app_state, AppAction::ClearClassFilter);
+                                            run_effects(api_base(), app_state, effects);
+                                        },
+                                        "×"
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
             aside { class: "panel right",
                 div { class: "panel-inner",
                     div { class: "section-title", "Classes" }
-                    div { class: "side-scroll",
+                    div { class: "classes-scroll",
                         for class_id in class_ids.iter().copied() {
                             ClassLegendRow {
                                 key: "legend-{class_id}",
@@ -651,8 +1027,9 @@ pub fn App(api_base: Option<String>) -> Element {
                                 }
                             }
                         }
-                        div { class: "stack-gap" }
-                        div { class: "section-title", "Objects" }
+                    }
+                    div { class: "section-title", "Objects" }
+                    div { class: "objects-scroll",
                         for label in state_value.current_labels.iter().cloned() {
                             ObjectRow {
                                 key: "object-{label.index}",
@@ -687,6 +1064,90 @@ pub fn App(api_base: Option<String>) -> Element {
                                 ondelete: move |index: usize| {
                                     let effects = reduce_state(app_state, AppAction::DeleteLabel { label_index: index });
                                     run_effects(api_base(), app_state, effects);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn ClassFilterBar(
+    class_map: HashMap<u32, String>,
+    color_map: HashMap<u32, (u8, u8, u8)>,
+    filter_classes: BTreeSet<u32>,
+    filter_mode: FilterMode,
+    ontoggle_class: EventHandler<u32>,
+    onset_mode: EventHandler<FilterMode>,
+    onclear: EventHandler<()>,
+) -> Element {
+    if class_map.is_empty() {
+        return rsx! { Fragment {} };
+    }
+
+    let is_active = !filter_classes.is_empty();
+    let mut sorted_class_ids: Vec<u32> = class_map.keys().copied().collect();
+    sorted_class_ids.sort_unstable();
+
+    rsx! {
+        div { class: "filter-bar",
+            div { class: "filter-bar-header",
+                span { class: "filter-label", "Filter" }
+                if is_active {
+                    button {
+                        class: "filter-clear",
+                        onclick: move |_| onclear.call(()),
+                        "× Clear"
+                    }
+                }
+            }
+            div { class: "filter-mode",
+                label {
+                    input {
+                        r#type: "radio",
+                        name: "filter-mode",
+                        checked: filter_mode == FilterMode::Any,
+                        onchange: move |_| onset_mode.call(FilterMode::Any),
+                    }
+                    " Any"
+                }
+                label {
+                    input {
+                        r#type: "radio",
+                        name: "filter-mode",
+                        checked: filter_mode == FilterMode::All,
+                        onchange: move |_| onset_mode.call(FilterMode::All),
+                    }
+                    " All"
+                }
+            }
+            div { class: "filter-chips",
+                for class_id in sorted_class_ids.into_iter() {
+                    {
+                        let name = class_map.get(&class_id).cloned().unwrap_or_else(|| format!("class {class_id}"));
+                        let is_selected = filter_classes.contains(&class_id);
+                        let rgb = color_map.get(&class_id).copied().unwrap_or_else(|| yoda_core::default_color_for_class(class_id));
+                        let color_str = format!("rgb({},{},{})", rgb.0, rgb.1, rgb.2);
+                        rsx! {
+                            if is_selected {
+                                button {
+                                    key: "chip-{class_id}",
+                                    class: "filter-chip active",
+                                    style: "border-color: {color_str}; background: {color_str}22;",
+                                    onclick: move |_| ontoggle_class.call(class_id),
+                                    div { class: "chip-swatch", style: "background: {color_str}" }
+                                    span { "{name}" }
+                                }
+                            } else {
+                                button {
+                                    key: "chip-{class_id}",
+                                    class: "filter-chip",
+                                    onclick: move |_| ontoggle_class.call(class_id),
+                                    div { class: "chip-swatch", style: "background: {color_str}" }
+                                    span { "{name}" }
                                 }
                             }
                         }
@@ -829,6 +1290,225 @@ fn ObjectRow(
     }
 }
 
+/// Combined SVG overlay for both edit mode (dblclick-to-select hit areas) and
+/// draw mode (click to place polygon vertices, click first vertex to close).
+#[component]
+fn CanvasOverlay(
+    labels: Vec<LabelObject>,
+    image_width: u32,
+    image_height: u32,
+    interaction_mode: InteractionMode,
+    drawing_vertices: Vec<Point>,
+    onselect: EventHandler<usize>,
+    onaddvertex: EventHandler<Point>,
+    onfinishdrawing: EventHandler<()>,
+) -> Element {
+    let mut cursor: Signal<Option<(f32, f32)>> = use_signal(|| None);
+    let is_draw = interaction_mode == InteractionMode::Draw;
+    let n = drawing_vertices.len();
+    let can_close = n >= 3;
+
+    // Precompute strings & data needed inside RSX --------------------------
+    let committed_pts: String = drawing_vertices
+        .iter()
+        .map(|p| format!("{},{}", p.x, p.y))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let cursor_val = cursor();
+    let cursor_near_close = can_close
+        && cursor_val.is_some_and(|(cx, cy)| {
+            let f = &drawing_vertices[0];
+            let dx = cx - f.x;
+            let dy = cy - f.y;
+            (dx * dx + dy * dy).sqrt() < CLOSE_ZONE_RADIUS * 2.0
+        });
+
+    // (index, x, y) for rendering vertex markers
+    let vertex_items: Vec<(usize, f32, f32)> =
+        drawing_vertices.iter().enumerate().map(|(i, v)| (i, v.x, v.y)).collect();
+
+    // Preview line: last vertex → cursor
+    let preview_line: Option<(f32, f32, f32, f32)> = cursor_val
+        .and_then(|(cx, cy)| drawing_vertices.last().map(|l| (l.x, l.y, cx, cy)));
+
+    // Extra closing-edge preview: cursor → vertex[0] (shown when near close zone)
+    let close_preview: Option<(f32, f32, f32, f32)> = if cursor_near_close {
+        let first = drawing_vertices.first().map(|v| (v.x, v.y));
+        cursor_val.zip(first).map(|((cx, cy), (fx, fy))| (cx, cy, fx, fy))
+    } else {
+        None
+    };
+
+    // Clone vertices for use inside the onclick closure
+    let dv_click = drawing_vertices.clone();
+
+    rsx! {
+        svg {
+            style: "position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none;",
+            "viewBox": "0 0 {image_width} {image_height}",
+            "preserveAspectRatio": "xMinYMin meet",
+
+            // ── Edit mode: transparent hit areas so dblclick selects labels ──
+            if !is_draw {
+                for label in labels.into_iter().filter(|l| l.visible) {
+                    HitAreaShape { key: "{label.index}", label, onselect }
+                }
+            }
+
+            // ── Draw mode ────────────────────────────────────────────────────
+            if is_draw {
+                // Full-canvas transparent rect to capture mouse events.
+                rect {
+                    x: "0",
+                    y: "0",
+                    width: "{image_width}",
+                    height: "{image_height}",
+                    fill: "transparent",
+                    "pointer-events": "all",
+                    style: "cursor: crosshair;",
+                    onmousemove: move |event: Event<MouseData>| {
+                        let c = event.element_coordinates();
+                        cursor.set(Some((c.x as f32, c.y as f32)));
+                    },
+                    onmouseleave: move |_| cursor.set(None),
+                    onclick: move |event: Event<MouseData>| {
+                        event.stop_propagation();
+                        let c = event.element_coordinates();
+                        let cx = c.x as f32;
+                        let cy = c.y as f32;
+                        // Close polygon if click lands near the first vertex.
+                        if can_close {
+                            let f = &dv_click[0];
+                            let dx = cx - f.x;
+                            let dy = cy - f.y;
+                            if (dx * dx + dy * dy).sqrt() < CLOSE_ZONE_RADIUS * 2.0 {
+                                onfinishdrawing.call(());
+                                return;
+                            }
+                        }
+                        onaddvertex.call(Point { x: cx, y: cy });
+                    },
+                }
+
+                // Committed polygon fill + dashed border
+                if n >= 2 {
+                    polygon {
+                        points: "{committed_pts}",
+                        fill: "rgba(127,159,75,0.12)",
+                        stroke: "#9fbe65",
+                        "stroke-width": "1.5",
+                        "stroke-dasharray": "8 4",
+                        "pointer-events": "none",
+                    }
+                }
+
+                // Preview line from last vertex to cursor
+                if let Some((x1, y1, x2, y2)) = preview_line {
+                    line {
+                        x1: "{x1}", y1: "{y1}", x2: "{x2}", y2: "{y2}",
+                        stroke: "#9fbe65",
+                        "stroke-width": "1.5",
+                        "stroke-dasharray": "5 3",
+                        opacity: "0.7",
+                        "pointer-events": "none",
+                    }
+                }
+
+                // Closing-edge preview (cursor → vertex[0]) when hovering near close zone
+                if let Some((x1, y1, x2, y2)) = close_preview {
+                    line {
+                        x1: "{x1}", y1: "{y1}", x2: "{x2}", y2: "{y2}",
+                        stroke: "#c5e89e",
+                        "stroke-width": "2",
+                        "pointer-events": "none",
+                    }
+                }
+
+                // Vertex markers
+                for (i, vx, vy) in vertex_items {
+                    if i == 0 && can_close {
+                        // First vertex: close-zone indicator ring + dot
+                        circle {
+                            cx: "{vx}", cy: "{vy}",
+                            r: "{CLOSE_ZONE_RADIUS}",
+                            fill: if cursor_near_close { "rgba(127,159,75,0.35)" } else { "rgba(127,159,75,0.12)" },
+                            stroke: "#9fbe65",
+                            "stroke-width": "1.5",
+                            "pointer-events": "none",
+                        }
+                        circle {
+                            cx: "{vx}", cy: "{vy}",
+                            r: "5",
+                            fill: "#9fbe65",
+                            stroke: "white",
+                            "stroke-width": "1.5",
+                            "pointer-events": "none",
+                        }
+                    } else {
+                        circle {
+                            cx: "{vx}", cy: "{vy}",
+                            r: "5",
+                            fill: "white",
+                            stroke: "#9fbe65",
+                            "stroke-width": "1.5",
+                            "pointer-events": "none",
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A single transparent hit-area shape (polygon or bbox rect) for one label.
+#[component]
+fn HitAreaShape(label: LabelObject, onselect: EventHandler<usize>) -> Element {
+    let label_idx = label.index;
+    match label.label_type {
+        LabelType::Polygon => {
+            let pts = label
+                .pixel_points
+                .iter()
+                .map(|p| format!("{},{}", p.x, p.y))
+                .collect::<Vec<_>>()
+                .join(" ");
+            rsx! {
+                polygon {
+                    points: "{pts}",
+                    fill: "transparent",
+                    stroke: "none",
+                    "pointer-events": "all",
+                    style: "cursor: pointer;",
+                    ondoubleclick: move |event: Event<MouseData>| {
+                        event.stop_propagation();
+                        onselect.call(label_idx);
+                    },
+                }
+            }
+        }
+        LabelType::Bbox => {
+            let bbox = label.pixel_bbox;
+            rsx! {
+                rect {
+                    x: "{bbox.x}",
+                    y: "{bbox.y}",
+                    width: "{bbox.width}",
+                    height: "{bbox.height}",
+                    fill: "transparent",
+                    stroke: "none",
+                    "pointer-events": "all",
+                    style: "cursor: pointer;",
+                    ondoubleclick: move |event: Event<MouseData>| {
+                        event.stop_propagation();
+                        onselect.call(label_idx);
+                    },
+                }
+            }
+        }
+    }
+}
+
 fn reduce_state(mut app_state: Signal<AppState>, action: AppAction) -> Vec<AppEffect> {
     let mut state = app_state.write();
     match apply_action(&mut state, action) {
@@ -847,10 +1527,13 @@ fn run_effects(api_base: String, app_state: Signal<AppState>, effects: Vec<AppEf
                 let mut app_state = app_state;
                 let api_base = api_base.clone();
                 spawn(async move {
-                    match save_labels(&api_base, &image_path.to_string_lossy(), labels).await {
+                    match save_labels(&api_base, &image_path.to_string_lossy(), labels)
+                        .await
+                    {
                         Ok(_) => {
                             let mut state = app_state.write();
-                            state.status.status_text = Some(String::from("Labels saved"));
+                            state.status.status_text =
+                                Some(String::from("Labels saved"));
                             state.status.error_text = None;
                         }
                         Err(error) => set_status_error(app_state, error),
@@ -866,7 +1549,10 @@ fn set_status_error(mut app_state: Signal<AppState>, message: String) {
     state.status.error_text = Some(message);
 }
 
-fn sorted_class_ids(class_map: &HashMap<u32, String>, labels: &[LabelObject]) -> Vec<u32> {
+fn sorted_class_ids(
+    class_map: &HashMap<u32, String>,
+    labels: &[LabelObject],
+) -> Vec<u32> {
     let mut ids = class_map.keys().copied().collect::<BTreeSet<_>>();
     ids.extend(labels.iter().map(|label| label.class_id));
     ids.into_iter().collect()
@@ -894,20 +1580,17 @@ fn render_overlay_data_uri(
 
     let wrapped = format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {} {}\" width=\"{}\" height=\"{}\" preserveAspectRatio=\"xMinYMin meet\">{svg}</svg>",
-        dimensions.width,
-        dimensions.height,
-        dimensions.width,
-        dimensions.height
+        dimensions.width, dimensions.height, dimensions.width, dimensions.height
     );
 
-    Some(format!(
-        "data:image/svg+xml;utf8,{}",
-        urlencoding::encode(&wrapped)
-    ))
+    Some(format!("data:image/svg+xml;utf8,{}", urlencoding::encode(&wrapped)))
 }
 
 fn build_image_url(api_base: &str, image_path: &str) -> String {
-    build_endpoint(api_base, &format!("/api/image?image_path={}", urlencoding::encode(image_path)))
+    build_endpoint(
+        api_base,
+        &format!("/api/image?image_path={}", urlencoding::encode(image_path)),
+    )
 }
 
 fn build_endpoint(api_base: &str, path: &str) -> String {
@@ -927,8 +1610,12 @@ fn build_endpoint(api_base: &str, path: &str) -> String {
     }
 }
 
-async fn fetch_labels(api_base: &str, image_path: &str) -> Result<LabelsResponse, String> {
-    let endpoint = format!("/api/labels?image_path={}", urlencoding::encode(image_path));
+async fn fetch_labels(
+    api_base: &str,
+    image_path: &str,
+) -> Result<LabelsResponse, String> {
+    let endpoint =
+        format!("/api/labels?image_path={}", urlencoding::encode(image_path));
     fetch_json(api_base, &endpoint).await
 }
 
@@ -937,9 +1624,7 @@ async fn fetch_flat_index(api_base: &str) -> Result<Vec<FlatNode>, String> {
 }
 
 async fn fetch_class_map(api_base: &str) -> Result<HashMap<u32, String>, String> {
-    Ok(fetch_json::<ClassMapResponse>(api_base, "/api/class-map")
-        .await?
-        .class_map)
+    Ok(fetch_json::<ClassMapResponse>(api_base, "/api/class-map").await?.class_map)
 }
 
 async fn fetch_color_map(api_base: &str) -> Result<HashMap<u32, (u8, u8, u8)>, String> {
@@ -951,7 +1636,17 @@ async fn fetch_color_map(api_base: &str) -> Result<HashMap<u32, (u8, u8, u8)>, S
         .collect())
 }
 
-async fn save_labels(api_base: &str, image_path: &str, labels: Vec<LabelObject>) -> Result<(), String> {
+async fn fetch_class_index(
+    api_base: &str,
+) -> Result<HashMap<String, Vec<u32>>, String> {
+    Ok(fetch_json::<ClassIndexResponse>(api_base, "/api/class-index").await?.entries)
+}
+
+async fn save_labels(
+    api_base: &str,
+    image_path: &str,
+    labels: Vec<LabelObject>,
+) -> Result<(), String> {
     let client = reqwest::Client::new();
     let endpoint = build_endpoint(
         api_base,
@@ -976,9 +1671,7 @@ where
     T: DeserializeOwned,
 {
     let endpoint = build_endpoint(api_base, path);
-    let response = reqwest::get(endpoint)
-        .await
-        .map_err(|error| error.to_string())?;
+    let response = reqwest::get(endpoint).await.map_err(|error| error.to_string())?;
     if !response.status().is_success() {
         return Err(response
             .text()

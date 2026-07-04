@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use axum::extract::{Extension, Query};
 use axum::http::{HeaderValue, StatusCode, header};
@@ -17,8 +17,8 @@ use yoda_app::RepositoryBackedAppServices;
 use yoda_config::YoDaSettings;
 use yoda_core::{LabelObject, RenderOptions, render_labels_to_svg};
 use yoda_data::{
-    DatasetRepository, FlatIndex, FlatNode, LocalDatasetRepository, TreeNode,
-    scan_dataset_tree,
+    ClassIndex, DatasetRepository, FlatIndex, FlatNode, LocalDatasetRepository, TreeNode,
+    extract_class_ids, scan_dataset_tree,
 };
 use yoda_ui::{PAN_ZOOM_SCRIPT, RootApp};
 
@@ -86,6 +86,7 @@ pub struct BackendState {
     repository: LocalDatasetRepository,
     image_root: PathBuf,
     flat_index: Arc<FlatIndex>,
+    class_index: Arc<RwLock<ClassIndex>>,
 }
 
 impl BackendState {
@@ -103,10 +104,15 @@ impl BackendState {
             "dataset tree scan complete"
         );
 
+        let label_root = settings.label_base_path.clone();
+        let class_index = ClassIndex::load_or_build(&image_root, &label_root, &flat_index);
+        tracing::info!(entry_count = class_index.entries.len(), "class index ready");
+
         Ok(Self {
             repository: LocalDatasetRepository::new(settings),
             image_root,
             flat_index,
+            class_index: Arc::new(RwLock::new(class_index)),
         })
     }
 
@@ -196,6 +202,12 @@ pub struct TreeStatusResponse {
 pub struct FlatIndexResponse {
     pub nodes: Arc<[FlatNode]>,
     pub image_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClassIndexResponse {
+    pub entries: std::collections::HashMap<String, Vec<u32>>,
+    pub all_class_ids: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -300,6 +312,7 @@ where
         .route("/labels", get(load_labels).put(save_labels))
         .route("/class-map", get(class_map))
         .route("/color-map", get(color_map))
+        .route("/class-index", get(class_index_handler))
         .layer(Extension(state))
 }
 
@@ -462,8 +475,17 @@ async fn save_labels(
     tracing::info!(image_path = %image_path.display(), label_count = payload.labels.len(), "persisting image labels");
     let services = state.services();
     services.persist_labels(&image_path, &payload.labels)?;
-    let loaded = services.load_image(&image_path)?;
 
+    // Update class index cache for the modified image.
+    let image_rel = dataset_relative_path(&state.image_root, &image_path);
+    let new_class_ids = extract_class_ids(&payload.labels);
+    if let Ok(mut index) = state.class_index.write() {
+        index.entries.insert(image_rel, new_class_ids);
+        let cache_path = state.repository.label_root().join(".yoda_class_index.json");
+        let _ = index.save_to_disk(&cache_path);
+    }
+
+    let loaded = services.load_image(&image_path)?;
     Ok(Json(LabelsResponse {
         image_path: loaded.image_path.to_string_lossy().into_owned(),
         label_path: loaded.label_path.to_string_lossy().into_owned(),
@@ -488,6 +510,20 @@ async fn color_map(
         tuples.into_iter().map(|(class_id, (r, g, b))| (class_id, [r, g, b])).collect();
 
     Ok(Json(ColorMapResponse { color_map }))
+}
+
+async fn class_index_handler(
+    Extension(state): Extension<Arc<BackendState>>,
+) -> Result<Json<ClassIndexResponse>, ApiError> {
+    let index = state
+        .class_index
+        .read()
+        .map_err(|_| ApiError::internal("class index lock poisoned"))?;
+    let all_class_ids = index.all_class_ids().into_iter().collect();
+    Ok(Json(ClassIndexResponse {
+        entries: index.entries.clone(),
+        all_class_ids,
+    }))
 }
 
 async fn render_fallback_viewer(

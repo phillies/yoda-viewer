@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use yoda_core::{create_label_from_pixels, delete_label, LabelError, LabelObject, Point};
-use yoda_data::{DatasetRepository, RepositoryError};
+use yoda_data::{DatasetRepository, FilterMode, RepositoryError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum InteractionMode {
@@ -69,6 +69,12 @@ pub struct AppState {
     pub access_mode: AccessMode,
     pub view: ViewTransform,
     pub status: StatusMetadata,
+    /// Classes to filter images by in the tree. Empty = no filter active.
+    pub filter_classes: BTreeSet<u32>,
+    /// Whether ALL or ANY of the selected filter classes must be present.
+    pub filter_mode: FilterMode,
+    /// Pre-fetched class index: dataset-relative path → list of class IDs.
+    pub class_index: HashMap<String, Vec<u32>>,
 }
 
 impl Default for AppState {
@@ -83,6 +89,9 @@ impl Default for AppState {
             selected_object_index: None,
             interaction_mode: InteractionMode::Edit,
             drawing_vertices: Vec::new(),
+            filter_classes: BTreeSet::new(),
+            filter_mode: FilterMode::default(),
+            class_index: HashMap::new(),
             drawing_class_id: 0,
             show_bbox: false,
             show_segmask: true,
@@ -175,6 +184,10 @@ pub enum AppAction {
     SetPan { x: f32, y: f32 },
     PanBy { dx: f32, dy: f32 },
     ResetView,
+    ClassIndexLoaded(HashMap<String, Vec<u32>>),
+    SetFilterClass { class_id: u32, selected: bool },
+    ClearClassFilter,
+    SetFilterMode(FilterMode),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -419,6 +432,26 @@ pub fn apply_action(state: &mut AppState, action: AppAction) -> Result<ActionRes
         }
         AppAction::ResetView => {
             state.view = ViewTransform::default();
+            ActionResult::applied()
+        }
+        AppAction::ClassIndexLoaded(entries) => {
+            state.class_index = entries;
+            ActionResult::applied()
+        }
+        AppAction::SetFilterClass { class_id, selected } => {
+            if selected {
+                state.filter_classes.insert(class_id);
+            } else {
+                state.filter_classes.remove(&class_id);
+            }
+            ActionResult::applied()
+        }
+        AppAction::ClearClassFilter => {
+            state.filter_classes.clear();
+            ActionResult::applied()
+        }
+        AppAction::SetFilterMode(mode) => {
+            state.filter_mode = mode;
             ActionResult::applied()
         }
     };
