@@ -261,6 +261,7 @@ button, select { font: inherit; }
 .panel-inner { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .section-title { padding: 16px 18px 10px; font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); }
 .tree-scroll, .side-scroll { overflow: auto; min-height: 0; padding: 0 10px 14px; }
+.tree-scroll { flex: 1 1 0; }
 .classes-scroll, .objects-scroll { overflow: auto; min-height: 0; max-height: 50%; padding: 0 10px 14px; }
 .tree-node { margin-left: var(--indent); }
 .tree-row { width: 100%; display: flex; align-items: center; gap: 8px; border: 1px solid transparent; background: transparent; color: inherit; padding: 8px 10px; border-radius: 10px; text-align: left; cursor: pointer; }
@@ -309,7 +310,7 @@ button, select { font: inherit; }
   .panel.right { border-top: 1px solid var(--line); }
   .canvas img.main-image { max-height: 50vh; }
 }
-.filter-bar { padding: 8px 10px 4px; border-bottom: 1px solid var(--line); }
+.filter-bar { padding: 8px 10px 4px; border-bottom: 1px solid var(--line); flex: none; max-height: 50%; overflow-y: auto; }
 .filter-bar-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
 .filter-label { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
 .filter-clear { background: transparent; color: var(--warn); border: 1px solid rgba(207,156,90,0.3); border-radius: 8px; padding: 3px 8px; font-size: 11px; cursor: pointer; }
