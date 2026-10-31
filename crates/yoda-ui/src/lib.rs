@@ -9,7 +9,7 @@ use yoda_app::{
     apply_action,
 };
 use yoda_core::{LabelObject, LabelType, Point, RenderOptions, render_labels_to_svg};
-use yoda_data::{FilterMode, FlatNode, NodeIcon, NodeKind};
+use yoda_data::{DatasetStats, FilterMode, FlatNode, NodeIcon, NodeKind};
 
 pub const PAN_ZOOM_SCRIPT: &str = r#"
 (function () {
@@ -265,6 +265,11 @@ button, select { font: inherit; }
 .classes-scroll, .objects-scroll { overflow: auto; min-height: 0; max-height: 50%; padding: 0 10px 14px; }
 .tree-node { margin-left: var(--indent); }
 .tree-row { width: 100%; display: flex; align-items: center; gap: 8px; border: 1px solid transparent; background: transparent; color: inherit; padding: 8px 10px; border-radius: 10px; text-align: left; cursor: pointer; }
+.tree-thumb { width: 64px; height: 40px; object-fit: cover; border-radius: 6px; flex: none; background: rgba(233,223,200,0.06); }
+.stats-panel { padding: 6px 10px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); max-height: 30%; overflow-y: auto; }
+.stats-panel table { width: 100%; border-collapse: collapse; }
+.stats-panel td { padding: 2px 4px; }
+.stats-panel td:last-child { text-align: right; }
 .tree-row:hover { background: rgba(233,223,200,0.06); border-color: rgba(233,223,200,0.08); }
 .tree-row.selected { background: var(--accent-soft); border-color: rgba(127, 159, 75, 0.42); }
 .tree-arrow { width: 14px; text-align: center; color: var(--muted); }
@@ -591,6 +596,8 @@ pub fn App(api_base: Option<String>) -> Element {
     let image_loading = use_signal(|| false);
     let mut search_query = use_signal(String::new);
     let mut refresh_tick = use_signal(|| 0u32);
+    let mut show_stats = use_signal(|| false);
+    let mut stats = use_signal(|| None::<DatasetStats>);
 
     {
         let api_base = api_base;
@@ -733,6 +740,7 @@ pub fn App(api_base: Option<String>) -> Element {
         }
     });
 
+    let searching = !search_query.read().trim().is_empty();
     let state_value = app_state();
     let visible_labels = state_value.visible_labels();
     let overlay_data_uri =
@@ -822,6 +830,47 @@ pub fn App(api_base: Option<String>) -> Element {
                             "⟳ Refresh"
                         }
                     }
+                    button {
+                        class: "filter-clear",
+                        onclick: move |_| {
+                            let open = !show_stats();
+                            show_stats.set(open);
+                            if open {
+                                let base = api_base();
+                                spawn(async move {
+                                    if let Ok(value) = fetch_json::<DatasetStats>(&base, "/api/stats").await {
+                                        stats.set(Some(value));
+                                    }
+                                });
+                            }
+                        },
+                        if show_stats() { "▾ Stats" } else { "▸ Stats" }
+                    }
+                    if show_stats() {
+                        if let Some(value) = stats() {
+                            div { class: "stats-panel",
+                                table {
+                                    tr { td { "Images" } td { "{value.images}" } }
+                                    tr { td { "Unlabeled" } td { "{value.unlabeled}" } }
+                                    for (class_id, count) in value.images_per_class.iter().copied() {
+                                        {
+                                            let name = app_state()
+                                                .class_map
+                                                .get(&class_id)
+                                                .cloned()
+                                                .unwrap_or_else(|| format!("class {class_id}"));
+                                            rsx! {
+                                                tr { key: "stat-{class_id}",
+                                                    td { "{name}" }
+                                                    td { "{count}" }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     if tree_loading() {
                         div { class: "message info", "Loading dataset tree..." }
                     }
@@ -829,6 +878,15 @@ pub fn App(api_base: Option<String>) -> Element {
                         for row in visible_rows().into_iter() {
                             FlatNodeView {
                                 key: "{row.id}",
+                                thumbnail_url: (searching && row.kind == NodeKind::Image).then(|| {
+                                    build_endpoint(
+                                        &api_base(),
+                                        &format!(
+                                            "/api/image/thumbnail?image_path={}&size=128",
+                                            urlencoding::encode(&row.path)
+                                        ),
+                                    )
+                                }),
                                 row,
                                 selected_image_path: selected_image_path_value.clone(),
                                 ontoggle: move |node_id: u32| {
@@ -1218,6 +1276,7 @@ fn FlatNodeView(
     selected_image_path: Option<String>,
     ontoggle: EventHandler<u32>,
     onselect: EventHandler<String>,
+    thumbnail_url: Option<String>,
 ) -> Element {
     let is_selected = row.kind == NodeKind::Image
         && selected_image_path.as_deref() == Some(row.path.as_str());
@@ -1255,7 +1314,11 @@ fn FlatNodeView(
                     }
                 },
                 span { class: "tree-arrow", "{arrow}" }
-                TreeNodeIcon { icon }
+                if let Some(src) = thumbnail_url {
+                    img { class: "tree-thumb", src: "{src}", loading: "lazy" }
+                } else {
+                    TreeNodeIcon { icon }
+                }
                 span { class: "tree-label", "{row.name}" }
             }
         }

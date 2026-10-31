@@ -29,6 +29,16 @@ substring match on the dataset-relative path (`train/car` finds
 `train/car25.jpg`). Results are a flat list, capped at 500; refine the query
 if you hit the cap. Search combines with the class filter.
 
+When a search is active, each result shows a thumbnail (lazy-loaded).
+Thumbnails are JPEGs cached in `<YODA_LABEL_BASE_PATH>/.yoda_thumbs/`, keyed by
+path, modification time and size, so they regenerate automatically when an
+image changes. The folder is safe to delete.
+
+### Stats panel
+Click **▸ Stats** above the tree to see the image count, the number of
+unlabeled images (empty or missing label file) and, per class, how many images
+contain it. Stats come from the index; click Refresh after external edits.
+
 ### Class filter
 Select class chips to show only images containing those classes.
 - **Any**: at least one selected class is present.
@@ -65,10 +75,13 @@ delete, it is rebuilt).
 | `GET /api/class-index` | Image → class IDs map |
 | `POST /api/index/refresh` | Rescan; returns `{total, rescanned, removed}` |
 | `GET/PUT /api/labels?image_path=` | Load / save labels |
-| `GET /api/image?image_path=` | Image bytes |
+| `GET /api/image?image_path=` | Image bytes (ETag; supports `If-None-Match` → 304) |
+| `GET /api/image/thumbnail?image_path=&size=` | Cached JPEG thumbnail (size 32–512, default 160) |
+| `GET /api/stats` | `{images, unlabeled, images_per_class}` |
 
 ## 7. Troubleshooting
 - **Slow first start**: expected while the index is built once.
 - **Filter results out of date**: click Refresh.
+- **Thumbnails slow the first time**: they are generated on demand, then cached.
 - **Index not persisted**: check write permission on the label folder.
 - **Classes missing as chips**: add them to the class YAML.

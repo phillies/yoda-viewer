@@ -1,8 +1,8 @@
 mod class_index;
 
 pub use class_index::{
-    ClassIndex, FilterMode, INDEX_DB_FILE, RefreshStats, extract_class_ids,
-    extract_class_ids_from_label_file,
+    ClassIndex, DatasetStats, FilterMode, INDEX_DB_FILE, RefreshStats,
+    extract_class_ids, extract_class_ids_from_label_file,
 };
 
 use std::collections::HashMap;
@@ -118,6 +118,43 @@ impl LocalDatasetRepository {
 
     pub fn label_root(&self) -> &Path {
         &self.settings.label_base_path
+    }
+
+    /// JPEG thumbnail with the longest edge `max_edge`, cached under
+    /// `<label_root>/.yoda_thumbs/` and keyed by path, mtime and size.
+    pub fn thumbnail_bytes(
+        &self,
+        image_path: &Path,
+        max_edge: u32,
+    ) -> Result<Vec<u8>, RepositoryError> {
+        let meta = fs::metadata(image_path)?;
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let key =
+            format!("{}|{}|{}|{}", image_path.display(), mtime, meta.len(), max_edge);
+        let mut hash: u64 = 0xcbf29ce484222325;
+        for byte in key.bytes() {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        let cache_dir = self.label_root().join(".yoda_thumbs");
+        let cache_file = cache_dir.join(format!("{hash:016x}.jpg"));
+        if let Ok(bytes) = fs::read(&cache_file) {
+            return Ok(bytes);
+        }
+
+        let thumb = image::open(image_path)?.thumbnail(max_edge, max_edge).to_rgb8();
+        let mut bytes = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 80)
+            .encode_image(&thumb)?;
+        if fs::create_dir_all(&cache_dir).is_ok() {
+            let _ = fs::write(&cache_file, &bytes); // best-effort cache
+        }
+        Ok(bytes)
     }
 
     pub fn label_path_for_image(

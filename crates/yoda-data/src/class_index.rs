@@ -29,6 +29,15 @@ pub struct RefreshStats {
     pub removed: usize,
 }
 
+/// Dataset statistics: image counts overall and per class.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DatasetStats {
+    pub images: usize,
+    pub unlabeled: usize,
+    /// (class id, number of images containing that class), sorted by class id.
+    pub images_per_class: Vec<(u32, usize)>,
+}
+
 /// Sparse map: dataset-relative image path → sorted list of class IDs
 /// present in the corresponding label file.
 ///
@@ -232,6 +241,25 @@ impl ClassIndex {
         self.entries.insert(image_rel.to_owned(), class_ids);
     }
 
+    /// Aggregate dataset statistics derived from the index.
+    pub fn stats(&self) -> DatasetStats {
+        let mut per_class: std::collections::BTreeMap<u32, usize> = Default::default();
+        let mut unlabeled = 0;
+        for classes in self.entries.values() {
+            if classes.is_empty() {
+                unlabeled += 1;
+            }
+            for id in classes {
+                *per_class.entry(*id).or_default() += 1;
+            }
+        }
+        DatasetStats {
+            images: self.entries.len(),
+            unlabeled,
+            images_per_class: per_class.into_iter().collect(),
+        }
+    }
+
     /// Returns the union of all class IDs present anywhere in the dataset.
     pub fn all_class_ids(&self) -> BTreeSet<u32> {
         self.entries.values().flatten().copied().collect()
@@ -329,5 +357,15 @@ mod tests {
         let stats = index.refresh(&images, &labels, &flat);
         assert_eq!(stats.removed, 1);
         assert!(!index.entries.contains_key("a.jpg"));
+    }
+
+    #[test]
+    fn stats_count_images_per_class() {
+        let (_temp, images, labels) = setup();
+        let flat = scan_dataset_tree(&images);
+        let stats = ClassIndex::load_or_build(&images, &labels, &flat).stats();
+        assert_eq!(stats.images, 2);
+        assert_eq!(stats.unlabeled, 1);
+        assert_eq!(stats.images_per_class, vec![(0, 1), (2, 1)]);
     }
 }

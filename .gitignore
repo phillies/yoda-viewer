@@ -21,3 +21,4 @@ node_modules/
 images/
 labels/
 .yoda_index.sqlite*
+.yoda_thumbs/
