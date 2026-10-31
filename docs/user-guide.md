@@ -213,7 +213,7 @@ image folder is never written to. All are safe to delete – they are rebuilt.
 
 | Path | Content |
 |---|---|
-| `<labels>/.yoda_index.sqlite` (+ `-wal`, `-shm`) | SQLite index: image path → label file mtime/size → class ids |
+| `<labels>/.yoda_index.sqlite` | SQLite index: image path → label file mtime/size → class ids |
 | `<labels>/.yoda_thumbs/` | Cached JPEG thumbnails |
 
 ### How the index stays fresh
@@ -275,16 +275,56 @@ All endpoints are under `/api` and return JSON unless noted. Errors are
 rejected.
 
 ## 13. Docker
-The repository `Dockerfile` builds the web bundle and server. Mount your dataset
-and set the environment variables, and expose the port, e.g.:
+
+### 13.1 Local data
+The repository `Dockerfile` builds the web bundle and server:
 ```bash
 docker build -t yoda-viewer .
 docker run -p 8080:8080 -e YODA_HOST=0.0.0.0 \
   -e YODA_IMAGE_BASE_PATH=/data/images -e YODA_LABEL_BASE_PATH=/data/labels \
   -e YODA_CLASS_INFO_YAML=/data/data.yaml -v /my/dataset:/data yoda-viewer
 ```
-Mount the label folder writable so edits and the index can be saved.
-Binding to `0.0.0.0` exposes an unauthenticated editor – restrict access.
+Mount the label folder writable. Binding to `0.0.0.0` exposes an
+unauthenticated editor – restrict access.
+
+### 13.2 Remote data via sshfs (e.g. behind Azure Arc SSH)
+The `sshfs` image target mounts images and labels from a remote host and starts
+the server; you browse at `http://localhost:8080` on your machine.
+
+```bash
+export SSH_HOST=myhost                 # alias from your ~/.ssh/config
+export REMOTE_IMAGES=/data/ds/images
+export REMOTE_LABELS=/data/ds/labels
+export YODA_CLASS_INFO_YAML=             # optional, path inside the container
+docker compose -f docker-compose.sshfs.yml run --rm --service-ports yoda
+```
+
+How it works
+1. Your `~/.ssh` is mounted read-only and copied inside, so `ssh myhost` and its
+   `ProxyCommand` behave as on the host. `~/.azure` is mounted so the `az`
+   token cache from your host login is reused. The image installs the Azure CLI
+   by default (`INSTALL_AZ_CLI=1`; set `0` if your ProxyCommand does not use `az`).
+2. The entrypoint first tries a non-interactive connection. If the host
+   credentials are valid you will see "Reused existing credentials".
+3. Otherwise the container prompts in your terminal (device-code / login
+   challenge / password). This is why it must run **interactively** (`-it`,
+   already set by the compose file). Complete the challenge once; the single
+   authenticated SSH connection is shared by both sshfs mounts.
+4. Images are mounted read-only (set `IMAGES_READ_WRITE=1` to allow writes), labels read-write.
+   The index and thumbnail caches are stored in the remote label folder.
+5. Stop with `Ctrl+C`; mounts and the SSH connection are cleaned up.
+
+Requirements and caveats
+- Linux Docker host or Docker Desktop with FUSE support. The container needs
+  `/dev/fuse`, `SYS_ADMIN` and `apparmor:unconfined` (set in the compose file).
+- If your ProxyCommand needs something other than `az` or a tool not in the
+  image, extend the `sshfs` stage in the `Dockerfile`.
+- The first index build reads every label over the network and is slow;
+  later starts are incremental. Thumbnails of full-size images are fetched over
+  the network on first view.
+- If the SSH session drops, sshfs reconnects but a token expiry may require
+  restarting the container to log in again.
+- Host keys: `known_hosts` is copied from your `~/.ssh`; a new host asks for confirmation in the prompt.
 
 ## 14. Troubleshooting & FAQ
 | Symptom | Cause / fix |

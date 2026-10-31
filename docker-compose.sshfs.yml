@@ -1,0 +1,32 @@
+# Usage (interactive, so the Azure Arc login challenge can be answered):
+#   SSH_HOST=myhost REMOTE_IMAGES=/data/images REMOTE_LABELS=/data/labels \
+#   docker compose -f docker-compose.sshfs.yml run --rm --service-ports yoda
+# then open http://localhost:8080
+services:
+  yoda:
+    build:
+      context: .
+      target: sshfs
+      args:
+        INSTALL_AZ_CLI: ${INSTALL_AZ_CLI:-1}
+    stdin_open: true
+    tty: true
+    ports:
+      - "127.0.0.1:${YODA_PORT:-8080}:8080"
+    environment:
+      SSH_HOST: ${SSH_HOST:?set SSH_HOST}
+      REMOTE_IMAGES: ${REMOTE_IMAGES:?set REMOTE_IMAGES}
+      REMOTE_LABELS: ${REMOTE_LABELS:?set REMOTE_LABELS}
+      IMAGES_READ_WRITE: ${IMAGES_READ_WRITE:-0}
+      YODA_CLASS_INFO_YAML: ${YODA_CLASS_INFO_YAML:-}
+    devices:
+      - /dev/fuse
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
+    volumes:
+      # Host ssh config/keys (copied inside, never modified)
+      - ${HOME}/.ssh:/host-ssh:ro
+      # Reuses the host Azure login/token cache for the ProxyCommand
+      - ${HOME}/.azure:/root/.azure

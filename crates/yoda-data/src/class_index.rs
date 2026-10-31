@@ -78,7 +78,7 @@ fn decode_classes(text: &str) -> Vec<u32> {
 fn open_db(path: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(path)?;
     conn.execute_batch(
-        "PRAGMA journal_mode = WAL;
+        "PRAGMA journal_mode = DELETE;
          CREATE TABLE IF NOT EXISTS images (
              path TEXT PRIMARY KEY,
              mtime_ns INTEGER NOT NULL,

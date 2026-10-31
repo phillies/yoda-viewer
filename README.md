@@ -54,6 +54,8 @@ All settings are read from environment variables (or a `.env` file):
 - **Hide / show by class**: use the class-legend checkboxes.
 - **Hide / show individual objects**: use the eye-icon buttons in the object list.
 
+Remote data over sshfs (Azure Arc SSH): see section 13.2 of the user guide.
+
 See [docs/user-guide.md](docs/user-guide.md) for the full user guide (search, filtering, index database).
 
 ## Workspace

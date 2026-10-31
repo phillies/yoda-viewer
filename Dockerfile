@@ -47,3 +47,19 @@ COPY --from=builder /app/yoda-web-release /usr/local/yoda-web
 EXPOSE 8080
 
 CMD ["/usr/local/yoda-web/yoda-web"]
+
+# Variant that mounts the dataset from a remote host over sshfs.
+# Build: docker build --target sshfs -t yoda-viewer-sshfs .
+# Pass --build-arg INSTALL_AZ_CLI=1 when your ssh_config ProxyCommand uses `az`.
+FROM runtime AS sshfs
+ARG INSTALL_AZ_CLI=0
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openssh-client sshfs fuse3 ca-certificates curl && \
+    if [ "$INSTALL_AZ_CLI" = "1" ]; then \
+    curl -sL https://aka.ms/InstallAzureCLIDeb | bash; \
+    fi && \
+    echo "user_allow_other" >> /etc/fuse.conf && \
+    rm -rf /var/lib/apt/lists/*
+COPY docker/sshfs-entrypoint.sh /usr/local/bin/sshfs-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/sshfs-entrypoint.sh"]
+CMD []
