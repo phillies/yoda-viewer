@@ -589,6 +589,8 @@ pub fn App(api_base: Option<String>) -> Element {
     let mut selected_image_path = use_signal(|| None::<String>);
     let tree_loading = use_signal(|| true);
     let image_loading = use_signal(|| false);
+    let mut search_query = use_signal(String::new);
+    let mut refresh_tick = use_signal(|| 0u32);
 
     {
         let api_base = api_base;
@@ -598,8 +600,14 @@ pub fn App(api_base: Option<String>) -> Element {
         let app_state = app_state;
         use_effect(move || {
             let api_base_value = api_base();
+            let refresh = refresh_tick();
             spawn(async move {
                 tree_loading.set(true);
+                if refresh > 0 {
+                    if let Err(error) = refresh_index(&api_base_value).await {
+                        set_status_error(app_state, error);
+                    }
+                }
                 match fetch_flat_index(&api_base_value).await {
                     Ok(nodes) => flat_nodes.set(nodes),
                     Err(error) => set_status_error(app_state, error),
@@ -680,7 +688,38 @@ pub fn App(api_base: Option<String>) -> Element {
         let map = children_map.read();
         let expanded = expanded_dirs.read();
         let state = app_state();
-        if state.filter_classes.is_empty() {
+        let query = search_query.read().trim().to_lowercase();
+        if !query.is_empty() {
+            let class_filter_active = !state.filter_classes.is_empty();
+            nodes
+                .iter()
+                .filter(|n| n.kind == NodeKind::Image)
+                .filter(|n| n.path.to_lowercase().contains(&query))
+                .filter(|n| {
+                    !class_filter_active
+                        || state.class_index.get(&n.path).is_some_and(|ids| match state
+                            .filter_mode
+                        {
+                            FilterMode::Any => {
+                                ids.iter().any(|id| state.filter_classes.contains(id))
+                            }
+                            FilterMode::All => {
+                                state.filter_classes.iter().all(|id| ids.contains(id))
+                            }
+                        })
+                })
+                .take(500)
+                .map(|n| VisibleRow {
+                    id: n.id,
+                    name: n.path.clone(),
+                    kind: NodeKind::Image,
+                    path: n.path.clone(),
+                    depth: 0,
+                    has_children: false,
+                    is_expanded: false,
+                })
+                .collect()
+        } else if state.filter_classes.is_empty() {
             compute_visible_rows(&nodes, &map, &expanded)
         } else {
             compute_filtered_rows(
@@ -768,6 +807,20 @@ pub fn App(api_base: Option<String>) -> Element {
                             let effects = reduce_state(app_state, AppAction::ClearClassFilter);
                             run_effects(api_base(), app_state, effects);
                         },
+                    }
+                    div { class: "filter-bar-header",
+                        input {
+                            r#type: "search",
+                            placeholder: "Search file name (max 500 results)",
+                            value: "{search_query}",
+                            oninput: move |e| search_query.set(e.value()),
+                        }
+                        button {
+                            class: "filter-clear",
+                            title: "Rescan images and label files",
+                            onclick: move |_| refresh_tick += 1,
+                            "⟳ Refresh"
+                        }
                     }
                     if tree_loading() {
                         div { class: "message info", "Loading dataset tree..." }
@@ -1641,6 +1694,22 @@ async fn fetch_class_index(
     api_base: &str,
 ) -> Result<HashMap<String, Vec<u32>>, String> {
     Ok(fetch_json::<ClassIndexResponse>(api_base, "/api/class-index").await?.entries)
+}
+
+async fn refresh_index(api_base: &str) -> Result<(), String> {
+    let response = reqwest::Client::new()
+        .post(build_endpoint(api_base, "/api/index/refresh"))
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        Err(response
+            .text()
+            .await
+            .unwrap_or_else(|_| String::from("index refresh failed")))
+    }
 }
 
 async fn save_labels(

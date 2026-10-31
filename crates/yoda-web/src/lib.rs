@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock};
 use axum::extract::{Extension, Query};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use dioxus_server::{DioxusRouterExt, FullstackState, ServeConfig};
 use serde::{Deserialize, Serialize};
@@ -17,8 +17,8 @@ use yoda_app::RepositoryBackedAppServices;
 use yoda_config::YoDaSettings;
 use yoda_core::{LabelObject, RenderOptions, render_labels_to_svg};
 use yoda_data::{
-    ClassIndex, DatasetRepository, FlatIndex, FlatNode, LocalDatasetRepository, TreeNode,
-    extract_class_ids, scan_dataset_tree,
+    ClassIndex, DatasetRepository, FlatIndex, FlatNode, LocalDatasetRepository,
+    RefreshStats, TreeNode, extract_class_ids, scan_dataset_tree,
 };
 use yoda_ui::{PAN_ZOOM_SCRIPT, RootApp};
 
@@ -85,7 +85,7 @@ a { color: inherit; text-decoration: none; }
 pub struct BackendState {
     repository: LocalDatasetRepository,
     image_root: PathBuf,
-    flat_index: Arc<FlatIndex>,
+    flat_index: Arc<RwLock<Arc<FlatIndex>>>,
     class_index: Arc<RwLock<ClassIndex>>,
 }
 
@@ -105,15 +105,38 @@ impl BackendState {
         );
 
         let label_root = settings.label_base_path.clone();
-        let class_index = ClassIndex::load_or_build(&image_root, &label_root, &flat_index);
+        let class_index =
+            ClassIndex::load_or_build(&image_root, &label_root, &flat_index);
         tracing::info!(entry_count = class_index.entries.len(), "class index ready");
 
         Ok(Self {
             repository: LocalDatasetRepository::new(settings),
             image_root,
-            flat_index,
+            flat_index: Arc::new(RwLock::new(flat_index)),
             class_index: Arc::new(RwLock::new(class_index)),
         })
+    }
+
+    fn current_flat_index(&self) -> Arc<FlatIndex> {
+        match self.flat_index.read() {
+            Ok(guard) => Arc::clone(&guard),
+            Err(poisoned) => Arc::clone(&poisoned.into_inner()),
+        }
+    }
+
+    /// Rescan the image tree and re-sync the class index with the label files.
+    fn refresh_index(&self) -> Result<RefreshStats, ApiError> {
+        let flat = Arc::new(scan_dataset_tree(&self.image_root));
+        let mut index = self
+            .class_index
+            .write()
+            .map_err(|_| ApiError::internal("class index lock poisoned"))?;
+        let stats =
+            index.refresh(&self.image_root, self.repository.label_root(), &flat);
+        if let Ok(mut guard) = self.flat_index.write() {
+            *guard = flat;
+        }
+        Ok(stats)
     }
 
     fn services(&self) -> RepositoryBackedAppServices<LocalDatasetRepository> {
@@ -313,6 +336,7 @@ where
         .route("/class-map", get(class_map))
         .route("/color-map", get(color_map))
         .route("/class-index", get(class_index_handler))
+        .route("/index/refresh", post(refresh_index_handler))
         .layer(Extension(state))
 }
 
@@ -396,18 +420,20 @@ async fn list_children(
 async fn tree_status(
     Extension(state): Extension<Arc<BackendState>>,
 ) -> Json<TreeStatusResponse> {
+    let flat = state.current_flat_index();
     Json(TreeStatusResponse {
-        node_count: state.flat_index.nodes.len(),
-        image_count: state.flat_index.image_count,
+        node_count: flat.nodes.len(),
+        image_count: flat.image_count,
     })
 }
 
 async fn tree_flat(
     Extension(state): Extension<Arc<BackendState>>,
 ) -> Json<FlatIndexResponse> {
+    let flat = state.current_flat_index();
     Json(FlatIndexResponse {
-        nodes: Arc::clone(&state.flat_index.nodes),
-        image_count: state.flat_index.image_count,
+        nodes: Arc::clone(&flat.nodes),
+        image_count: flat.image_count,
     })
 }
 
@@ -480,9 +506,11 @@ async fn save_labels(
     let image_rel = dataset_relative_path(&state.image_root, &image_path);
     let new_class_ids = extract_class_ids(&payload.labels);
     if let Ok(mut index) = state.class_index.write() {
-        index.entries.insert(image_rel, new_class_ids);
-        let cache_path = state.repository.label_root().join(".yoda_class_index.json");
-        let _ = index.save_to_disk(&cache_path);
+        let label_path = state
+            .repository
+            .label_path_for_image(&image_path)
+            .unwrap_or_else(|_| PathBuf::from(&query.image_path));
+        index.update_entry(&image_rel, &label_path, new_class_ids);
     }
 
     let loaded = services.load_image(&image_path)?;
@@ -512,6 +540,16 @@ async fn color_map(
     Ok(Json(ColorMapResponse { color_map }))
 }
 
+async fn refresh_index_handler(
+    Extension(state): Extension<Arc<BackendState>>,
+) -> Result<Json<RefreshStats>, ApiError> {
+    let stats = tokio::task::spawn_blocking(move || state.refresh_index())
+        .await
+        .map_err(|error| ApiError::internal(error.to_string()))??;
+    tracing::info!(?stats, "index refreshed");
+    Ok(Json(stats))
+}
+
 async fn class_index_handler(
     Extension(state): Extension<Arc<BackendState>>,
 ) -> Result<Json<ClassIndexResponse>, ApiError> {
@@ -520,10 +558,7 @@ async fn class_index_handler(
         .read()
         .map_err(|_| ApiError::internal("class index lock poisoned"))?;
     let all_class_ids = index.all_class_ids().into_iter().collect();
-    Ok(Json(ClassIndexResponse {
-        entries: index.entries.clone(),
-        all_class_ids,
-    }))
+    Ok(Json(ClassIndexResponse { entries: index.entries.clone(), all_class_ids }))
 }
 
 async fn render_fallback_viewer(

@@ -1,7 +1,8 @@
 mod class_index;
 
 pub use class_index::{
-    ClassIndex, FilterMode, extract_class_ids, extract_class_ids_from_label_file,
+    ClassIndex, FilterMode, INDEX_DB_FILE, RefreshStats, extract_class_ids,
+    extract_class_ids_from_label_file,
 };
 
 use std::collections::HashMap;

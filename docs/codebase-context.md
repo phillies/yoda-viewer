@@ -107,7 +107,7 @@ Example dataset config is in `example_data/carparts-seg.yaml`.
 
 ## Class Filter Feature (implemented, committed)
 
-- **Cache file**: `<label_root>/.yoda_class_index.json` (278 KB for 3850-image dataset)
+- **Cache file**: `<label_root>/.yoda_index.sqlite` (278 KB for 3850-image dataset)
 - **Startup cost**: ~35 s first build, ~0.03 s cached restart
 - **Filter counts (example dataset)**: class 0 → 870 images, classes 0+1 All → 294 images
 - **UI**: `ClassFilterBar` component renders one chip per class; Any/All radio; clear button

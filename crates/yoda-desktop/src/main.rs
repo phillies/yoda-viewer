@@ -38,16 +38,12 @@ fn main() {
 }
 
 fn run_desktop() -> anyhow::Result<()> {
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(env_filter)
-        .try_init();
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let _ = tracing_subscriber::fmt().with_env_filter(env_filter).try_init();
 
     let mut settings = YoDaSettings::from_env().unwrap_or_default();
-    let host = settings
-        .host
-        .clone()
-        .unwrap_or_else(|| String::from("127.0.0.1"));
+    let host = settings.host.clone().unwrap_or_else(|| String::from("127.0.0.1"));
     let port = find_available_port(&host, settings.port)?;
     settings.host = Some(host.clone());
     settings.port = port;
@@ -67,24 +63,26 @@ fn run_desktop() -> anyhow::Result<()> {
     );
 
     std::thread::spawn(move || {
-        let runtime = match tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-        {
-            Ok(runtime) => runtime,
-            Err(error) => {
-                tracing::error!(error = %error, "build desktop backend runtime");
-                return;
-            }
-        };
+        let runtime =
+            match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    tracing::error!(error = %error, "build desktop backend runtime");
+                    return;
+                }
+            };
 
         runtime.block_on(async move {
             let result: anyhow::Result<()> = async {
-                let router = build_router(server_settings)
-                    .map_err(|error| anyhow::anyhow!("build desktop backend router: {error:?}"))?;
-                let listener = tokio::net::TcpListener::bind((server_host.as_str(), port))
-                    .await
-                    .with_context(|| format!("bind desktop backend listener on {server_host}:{port}"))?;
+                let router = build_router(server_settings).map_err(|error| {
+                    anyhow::anyhow!("build desktop backend router: {error:?}")
+                })?;
+                let listener =
+                    tokio::net::TcpListener::bind((server_host.as_str(), port))
+                        .await
+                        .with_context(|| {
+                        format!("bind desktop backend listener on {server_host}:{port}")
+                    })?;
 
                 axum::serve(listener, router.into_make_service())
                     .await
