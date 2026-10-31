@@ -34,6 +34,13 @@ Thumbnails are JPEGs cached in `<YODA_LABEL_BASE_PATH>/.yoda_thumbs/`, keyed by
 path, modification time and size, so they regenerate automatically when an
 image changes. The folder is safe to delete.
 
+### Prev / Next and Gallery
+The toolbar has **◀ Prev** / **Next ▶** buttons that step through the images
+matching the current search and class filter (tree order), with a position
+counter. **Gallery** replaces the viewer with a thumbnail grid of the same
+list, 60 images per page (so the page stays fast with 50k images). Click a
+tile to open the image; the grid opens on the page of the current image.
+
 ### Stats panel
 Click **▸ Stats** above the tree to see the image count, the number of
 unlabeled images (empty or missing label file) and, per class, how many images
