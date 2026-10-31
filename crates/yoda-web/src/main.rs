@@ -1,11 +1,11 @@
 #![allow(non_snake_case)]
 
 #[cfg(feature = "server")]
+use anyhow::Context;
+#[cfg(feature = "server")]
 use std::net::TcpListener;
 #[cfg(feature = "server")]
 use std::path::Path;
-#[cfg(feature = "server")]
-use anyhow::Context;
 #[cfg(feature = "server")]
 use yoda_config::YoDaSettings;
 #[cfg(feature = "server")]
@@ -24,17 +24,13 @@ async fn main() {
 async fn run_server() -> anyhow::Result<()> {
     use tracing_subscriber::EnvFilter;
 
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    tracing_subscriber::fmt()
-        .with_env_filter(env_filter)
-        .init();
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
     let cli_address = dioxus_cli_config::fullstack_address_or_localhost();
     let mut settings = YoDaSettings::from_env().unwrap_or_default();
-    let host = settings
-        .host
-        .clone()
-        .unwrap_or_else(|| cli_address.ip().to_string());
+    let host = settings.host.clone().unwrap_or_else(|| cli_address.ip().to_string());
     let requested_port = std::env::var("YODA_PORT")
         .ok()
         .and_then(|value| value.parse::<u16>().ok())

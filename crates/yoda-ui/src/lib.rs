@@ -9,7 +9,7 @@ use yoda_app::{
     apply_action,
 };
 use yoda_core::{LabelObject, LabelType, Point, RenderOptions, render_labels_to_svg};
-use yoda_data::{FilterMode, FlatNode, NodeIcon, NodeKind};
+use yoda_data::{DatasetStats, FilterMode, FlatNode, NodeIcon, NodeKind};
 
 pub const PAN_ZOOM_SCRIPT: &str = r#"
 (function () {
@@ -236,6 +236,8 @@ pub const DRAW_SCRIPT: &str = r#"
 })();
 "#;
 
+const GALLERY_PAGE_SIZE: usize = 60;
+
 const APP_CSS: &str = r#"
 :root {
     color-scheme: dark;
@@ -265,6 +267,19 @@ button, select { font: inherit; }
 .classes-scroll, .objects-scroll { overflow: auto; min-height: 0; max-height: 50%; padding: 0 10px 14px; }
 .tree-node { margin-left: var(--indent); }
 .tree-row { width: 100%; display: flex; align-items: center; gap: 8px; border: 1px solid transparent; background: transparent; color: inherit; padding: 8px 10px; border-radius: 10px; text-align: left; cursor: pointer; }
+.tree-thumb { width: 64px; height: 40px; object-fit: cover; border-radius: 6px; flex: none; background: rgba(233,223,200,0.06); }
+.stats-panel { padding: 6px 10px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); max-height: 30%; overflow-y: auto; }
+.stats-panel table { width: 100%; border-collapse: collapse; }
+.stats-panel td { padding: 2px 4px; }
+.stats-panel td:last-child { text-align: right; }
+.gallery { flex: 1 1 0; min-height: 0; overflow: auto; padding: 12px 16px; }
+.gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.gallery-tile { display: flex; flex-direction: column; gap: 4px; padding: 6px; border: 1px solid var(--line); border-radius: 10px; background: rgba(233,223,200,0.04); color: inherit; cursor: pointer; text-align: left; }
+.gallery-tile:hover { background: rgba(233,223,200,0.09); }
+.gallery-tile.selected { border-color: var(--accent); background: var(--accent-soft); }
+.gallery-tile img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; border-radius: 6px; background: rgba(0,0,0,0.25); }
+.gallery-tile span { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gallery-pager { display: flex; gap: 10px; align-items: center; justify-content: center; padding: 10px; font-size: 13px; }
 .tree-row:hover { background: rgba(233,223,200,0.06); border-color: rgba(233,223,200,0.08); }
 .tree-row.selected { background: var(--accent-soft); border-color: rgba(127, 159, 75, 0.42); }
 .tree-arrow { width: 14px; text-align: center; color: var(--muted); }
@@ -589,6 +604,12 @@ pub fn App(api_base: Option<String>) -> Element {
     let mut selected_image_path = use_signal(|| None::<String>);
     let tree_loading = use_signal(|| true);
     let image_loading = use_signal(|| false);
+    let mut search_query = use_signal(String::new);
+    let mut refresh_tick = use_signal(|| 0u32);
+    let mut show_stats = use_signal(|| false);
+    let mut gallery_open = use_signal(|| false);
+    let mut gallery_page = use_signal(|| 0usize);
+    let mut stats = use_signal(|| None::<DatasetStats>);
 
     {
         let api_base = api_base;
@@ -598,8 +619,14 @@ pub fn App(api_base: Option<String>) -> Element {
         let app_state = app_state;
         use_effect(move || {
             let api_base_value = api_base();
+            let refresh = refresh_tick();
             spawn(async move {
                 tree_loading.set(true);
+                if refresh > 0 {
+                    if let Err(error) = refresh_index(&api_base_value).await {
+                        set_status_error(app_state, error);
+                    }
+                }
                 match fetch_flat_index(&api_base_value).await {
                     Ok(nodes) => flat_nodes.set(nodes),
                     Err(error) => set_status_error(app_state, error),
@@ -680,7 +707,38 @@ pub fn App(api_base: Option<String>) -> Element {
         let map = children_map.read();
         let expanded = expanded_dirs.read();
         let state = app_state();
-        if state.filter_classes.is_empty() {
+        let query = search_query.read().trim().to_lowercase();
+        if !query.is_empty() {
+            let class_filter_active = !state.filter_classes.is_empty();
+            nodes
+                .iter()
+                .filter(|n| n.kind == NodeKind::Image)
+                .filter(|n| n.path.to_lowercase().contains(&query))
+                .filter(|n| {
+                    !class_filter_active
+                        || state.class_index.get(&n.path).is_some_and(|ids| match state
+                            .filter_mode
+                        {
+                            FilterMode::Any => {
+                                ids.iter().any(|id| state.filter_classes.contains(id))
+                            }
+                            FilterMode::All => {
+                                state.filter_classes.iter().all(|id| ids.contains(id))
+                            }
+                        })
+                })
+                .take(500)
+                .map(|n| VisibleRow {
+                    id: n.id,
+                    name: n.path.clone(),
+                    kind: NodeKind::Image,
+                    path: n.path.clone(),
+                    depth: 0,
+                    has_children: false,
+                    is_expanded: false,
+                })
+                .collect()
+        } else if state.filter_classes.is_empty() {
             compute_visible_rows(&nodes, &map, &expanded)
         } else {
             compute_filtered_rows(
@@ -694,6 +752,38 @@ pub fn App(api_base: Option<String>) -> Element {
         }
     });
 
+    // Ordered image paths matching the current search and class filter (tree order).
+    let image_paths = use_memo(move || {
+        let nodes = flat_nodes.read();
+        let state = app_state();
+        let query = search_query.read().trim().to_lowercase();
+        nodes
+            .iter()
+            .filter(|n| n.kind == NodeKind::Image)
+            .filter(|n| query.is_empty() || n.path.to_lowercase().contains(&query))
+            .filter(|n| {
+                state.filter_classes.is_empty()
+                    || state.class_index.get(&n.path).is_some_and(|ids| {
+                        match state.filter_mode {
+                            FilterMode::Any => {
+                                ids.iter().any(|id| state.filter_classes.contains(id))
+                            }
+                            FilterMode::All => {
+                                state.filter_classes.iter().all(|id| ids.contains(id))
+                            }
+                        }
+                    })
+            })
+            .map(|n| n.path.clone())
+            .collect::<Vec<String>>()
+    });
+    let current_pos = selected_image_path()
+        .and_then(|current| image_paths.read().iter().position(|p| *p == current));
+    let image_total = image_paths.read().len();
+    let page_count = image_total.div_ceil(GALLERY_PAGE_SIZE).max(1);
+    let page = gallery_page().min(page_count - 1);
+
+    let searching = !search_query.read().trim().is_empty();
     let state_value = app_state();
     let visible_labels = state_value.visible_labels();
     let overlay_data_uri =
@@ -769,6 +859,61 @@ pub fn App(api_base: Option<String>) -> Element {
                             run_effects(api_base(), app_state, effects);
                         },
                     }
+                    div { class: "filter-bar-header",
+                        input {
+                            r#type: "search",
+                            placeholder: "Search file name (max 500 results)",
+                            value: "{search_query}",
+                            oninput: move |e| search_query.set(e.value()),
+                        }
+                        button {
+                            class: "filter-clear",
+                            title: "Rescan images and label files",
+                            onclick: move |_| refresh_tick += 1,
+                            "⟳ Refresh"
+                        }
+                    }
+                    button {
+                        class: "filter-clear",
+                        onclick: move |_| {
+                            let open = !show_stats();
+                            show_stats.set(open);
+                            if open {
+                                let base = api_base();
+                                spawn(async move {
+                                    if let Ok(value) = fetch_json::<DatasetStats>(&base, "/api/stats").await {
+                                        stats.set(Some(value));
+                                    }
+                                });
+                            }
+                        },
+                        if show_stats() { "▾ Stats" } else { "▸ Stats" }
+                    }
+                    if show_stats() {
+                        if let Some(value) = stats() {
+                            div { class: "stats-panel",
+                                table {
+                                    tr { td { "Images" } td { "{value.images}" } }
+                                    tr { td { "Unlabeled" } td { "{value.unlabeled}" } }
+                                    for (class_id, count) in value.images_per_class.iter().copied() {
+                                        {
+                                            let name = app_state()
+                                                .class_map
+                                                .get(&class_id)
+                                                .cloned()
+                                                .unwrap_or_else(|| format!("class {class_id}"));
+                                            rsx! {
+                                                tr { key: "stat-{class_id}",
+                                                    td { "{name}" }
+                                                    td { "{count}" }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     if tree_loading() {
                         div { class: "message info", "Loading dataset tree..." }
                     }
@@ -776,6 +921,15 @@ pub fn App(api_base: Option<String>) -> Element {
                         for row in visible_rows().into_iter() {
                             FlatNodeView {
                                 key: "{row.id}",
+                                thumbnail_url: (searching && row.kind == NodeKind::Image).then(|| {
+                                    build_endpoint(
+                                        &api_base(),
+                                        &format!(
+                                            "/api/image/thumbnail?image_path={}&size=128",
+                                            urlencoding::encode(&row.path)
+                                        ),
+                                    )
+                                }),
                                 row,
                                 selected_image_path: selected_image_path_value.clone(),
                                 ontoggle: move |node_id: u32| {
@@ -797,6 +951,53 @@ pub fn App(api_base: Option<String>) -> Element {
 
             section { class: "content",
                 div { class: "toolbar",
+                    div { class: "toolbar-group",
+                        button {
+                            title: "Previous image",
+                            disabled: current_pos == Some(0),
+                            onclick: move |_| {
+                                let list = image_paths.read();
+                                let target = match current_pos {
+                                    Some(i) if i > 0 => list.get(i - 1),
+                                    Some(_) => None,
+                                    None => list.last(),
+                                };
+                                if let Some(path) = target {
+                                    selected_image_path.set(Some(path.clone()));
+                                }
+                            },
+                            "◀ Prev"
+                        }
+                        button {
+                            title: "Next image",
+                            disabled: current_pos.is_some_and(|i| i + 1 >= image_total),
+                            onclick: move |_| {
+                                let list = image_paths.read();
+                                let target = match current_pos {
+                                    Some(i) => list.get(i + 1),
+                                    None => list.first(),
+                                };
+                                if let Some(path) = target {
+                                    selected_image_path.set(Some(path.clone()));
+                                }
+                            },
+                            "Next ▶"
+                        }
+                        if let Some(i) = current_pos {
+                            span { class: "status-pill", "{i + 1} / {image_total}" }
+                        }
+                        button {
+                            class: if gallery_open() { "active" } else { "" },
+                            onclick: move |_| {
+                                if !gallery_open() {
+                                    let target = current_pos.unwrap_or(0) / GALLERY_PAGE_SIZE;
+                                    gallery_page.set(target);
+                                }
+                                gallery_open.set(!gallery_open());
+                            },
+                            "Gallery"
+                        }
+                    }
                     div { class: "toolbar-group",
                         button {
                             class: if state_value.show_segmask { "active" } else { "" },
@@ -928,6 +1129,52 @@ pub fn App(api_base: Option<String>) -> Element {
                     div { class: "message info", "{status_text}" }
                 }
 
+                if gallery_open() {
+                    div { class: "gallery",
+                        div { class: "gallery-pager",
+                            button {
+                                disabled: page == 0,
+                                onclick: move |_| gallery_page.set(page.saturating_sub(1)),
+                                "◀"
+                            }
+                            span { "Page {page + 1} / {page_count} · {image_total} images" }
+                            button {
+                                disabled: page + 1 >= page_count,
+                                onclick: move |_| gallery_page.set(page + 1),
+                                "▶"
+                            }
+                        }
+                        div { class: "gallery-grid",
+                            for path in image_paths.read().iter().skip(page * GALLERY_PAGE_SIZE).take(GALLERY_PAGE_SIZE).cloned() {
+                                {
+                                    let src = build_endpoint(
+                                        &api_base(),
+                                        &format!(
+                                            "/api/image/thumbnail?image_path={}&size=256",
+                                            urlencoding::encode(&path)
+                                        ),
+                                    );
+                                    let is_selected = selected_image_path_value.as_deref() == Some(path.as_str());
+                                    let label = path.rsplit('/').next().unwrap_or(&path).to_owned();
+                                    let click_path = path.clone();
+                                    rsx! {
+                                        button {
+                                            key: "{path}",
+                                            class: if is_selected { "gallery-tile selected" } else { "gallery-tile" },
+                                            title: "{path}",
+                                            onclick: move |_| {
+                                                selected_image_path.set(Some(click_path.clone()));
+                                                gallery_open.set(false);
+                                            },
+                                            img { src: "{src}", loading: "lazy" }
+                                            span { "{label}" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
                 div { class: "viewport-wrap",
                     div {
                         class: "viewport",
@@ -1004,6 +1251,7 @@ pub fn App(api_base: Option<String>) -> Element {
                             }
                         }
                     }
+                }
                 }
             }
 
@@ -1165,6 +1413,7 @@ fn FlatNodeView(
     selected_image_path: Option<String>,
     ontoggle: EventHandler<u32>,
     onselect: EventHandler<String>,
+    thumbnail_url: Option<String>,
 ) -> Element {
     let is_selected = row.kind == NodeKind::Image
         && selected_image_path.as_deref() == Some(row.path.as_str());
@@ -1202,7 +1451,11 @@ fn FlatNodeView(
                     }
                 },
                 span { class: "tree-arrow", "{arrow}" }
-                TreeNodeIcon { icon }
+                if let Some(src) = thumbnail_url {
+                    img { class: "tree-thumb", src: "{src}", loading: "lazy" }
+                } else {
+                    TreeNodeIcon { icon }
+                }
                 span { class: "tree-label", "{row.name}" }
             }
         }
@@ -1641,6 +1894,22 @@ async fn fetch_class_index(
     api_base: &str,
 ) -> Result<HashMap<String, Vec<u32>>, String> {
     Ok(fetch_json::<ClassIndexResponse>(api_base, "/api/class-index").await?.entries)
+}
+
+async fn refresh_index(api_base: &str) -> Result<(), String> {
+    let response = reqwest::Client::new()
+        .post(build_endpoint(api_base, "/api/index/refresh"))
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        Err(response
+            .text()
+            .await
+            .unwrap_or_else(|_| String::from("index refresh failed")))
+    }
 }
 
 async fn save_labels(

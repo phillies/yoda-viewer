@@ -27,12 +27,7 @@ pub struct PixelBBox {
 
 impl PixelBBox {
     pub const fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
-        Self {
-            x,
-            y,
-            width,
-            height,
-        }
+        Self { x, y, width, height }
     }
 }
 
@@ -106,25 +101,32 @@ fn parse_yolo_label_text(
         }
 
         let mut parts = trimmed.split_whitespace();
-        let class_token = parts
-            .next()
-            .ok_or(LabelError::MissingClassId { line: line_number })?;
-        let class_id = class_token.parse::<u32>().map_err(|_| LabelError::InvalidClassId {
-            line: line_number,
-            value: class_token.to_string(),
-        })?;
+        let class_token =
+            parts.next().ok_or(LabelError::MissingClassId { line: line_number })?;
+        let class_id =
+            class_token.parse::<u32>().map_err(|_| LabelError::InvalidClassId {
+                line: line_number,
+                value: class_token.to_string(),
+            })?;
 
         let mut coords = Vec::new();
         for part in parts {
-            let coord = part.parse::<f32>().map_err(|_| LabelError::InvalidCoordinate {
-                line: line_number,
-                value: part.to_string(),
-            })?;
+            let coord =
+                part.parse::<f32>().map_err(|_| LabelError::InvalidCoordinate {
+                    line: line_number,
+                    value: part.to_string(),
+                })?;
             coords.push(coord);
         }
 
         match coords.len() {
-            4 => labels.push(parse_bbox(line_index, class_id, coords, image_width, image_height)),
+            4 => labels.push(parse_bbox(
+                line_index,
+                class_id,
+                coords,
+                image_width,
+                image_height,
+            )),
             count if count >= 6 && count % 2 == 0 => labels.push(parse_polygon(
                 line_index,
                 class_id,
@@ -180,7 +182,9 @@ fn parse_polygon(
 ) -> Result<LabelObject, LabelError> {
     let points = coords
         .chunks_exact(2)
-        .map(|chunk| Point::new(chunk[0] * image_width as f32, chunk[1] * image_height as f32))
+        .map(|chunk| {
+            Point::new(chunk[0] * image_width as f32, chunk[1] * image_height as f32)
+        })
         .collect::<Vec<_>>();
 
     if points.len() < 3 {
@@ -238,23 +242,14 @@ pub fn create_label_from_pixels(
 ) -> Result<LabelObject, LabelError> {
     validate_dimensions(image_width, image_height)?;
     if pixel_points.len() < 3 {
-        return Err(LabelError::TooFewCreatePoints {
-            count: pixel_points.len(),
-        });
+        return Err(LabelError::TooFewCreatePoints { count: pixel_points.len() });
     }
 
-    let points = pixel_points
-        .iter()
-        .map(|(x, y)| Point::new(*x, *y))
-        .collect::<Vec<_>>();
+    let points =
+        pixel_points.iter().map(|(x, y)| Point::new(*x, *y)).collect::<Vec<_>>();
     let normalized_coords = points
         .iter()
-        .flat_map(|point| {
-            [
-                point.x / image_width as f32,
-                point.y / image_height as f32,
-            ]
-        })
+        .flat_map(|point| [point.x / image_width as f32, point.y / image_height as f32])
         .collect::<Vec<_>>();
 
     Ok(LabelObject {
@@ -283,15 +278,9 @@ pub fn delete_label(labels: &[LabelObject], label_index: usize) -> Vec<LabelObje
 
 fn bounding_box_for_points(points: &[Point]) -> PixelBBox {
     let min_x = points.iter().map(|point| point.x).fold(f32::INFINITY, f32::min);
-    let max_x = points
-        .iter()
-        .map(|point| point.x)
-        .fold(f32::NEG_INFINITY, f32::max);
+    let max_x = points.iter().map(|point| point.x).fold(f32::NEG_INFINITY, f32::max);
     let min_y = points.iter().map(|point| point.y).fold(f32::INFINITY, f32::min);
-    let max_y = points
-        .iter()
-        .map(|point| point.y)
-        .fold(f32::NEG_INFINITY, f32::max);
+    let max_y = points.iter().map(|point| point.y).fold(f32::NEG_INFINITY, f32::max);
 
     PixelBBox::new(min_x, min_y, max_x - min_x, max_y - min_y)
 }
@@ -314,8 +303,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        create_label_from_pixels, delete_label, parse_yolo_label_text, parse_yolo_labels,
-        write_yolo_labels, LabelObject, LabelType, PixelBBox, Point,
+        LabelObject, LabelType, PixelBBox, Point, create_label_from_pixels,
+        delete_label, parse_yolo_label_text, parse_yolo_labels, write_yolo_labels,
     };
 
     fn approx_eq(left: f32, right: f32) {
@@ -501,7 +490,8 @@ mod tests {
     fn write_multiple_labels() {
         let temp = TempDir::new().expect("create temp dir");
         let out = temp.path().join("out.txt");
-        write_yolo_labels(&out, &[sample_polygon(), sample_bbox()]).expect("write labels");
+        write_yolo_labels(&out, &[sample_polygon(), sample_bbox()])
+            .expect("write labels");
         let contents = fs::read_to_string(&out).expect("read file");
         let lines = contents.lines().collect::<Vec<_>>();
         assert_eq!(lines.len(), 2);
@@ -512,7 +502,8 @@ mod tests {
     #[test]
     fn basic_triangle_from_pixels() {
         let points = [(100.0, 100.0), (200.0, 100.0), (150.0, 200.0)];
-        let label = create_label_from_pixels(&points, 640, 480, 2, 0).expect("create label");
+        let label =
+            create_label_from_pixels(&points, 640, 480, 2, 0).expect("create label");
         assert_eq!(label.label_type, LabelType::Polygon);
         assert_eq!(label.class_id, 2);
         assert_eq!(label.index, 0);
@@ -522,7 +513,8 @@ mod tests {
     #[test]
     fn normalized_coords_correct() {
         let points = [(64.0, 96.0), (192.0, 96.0), (192.0, 384.0)];
-        let label = create_label_from_pixels(&points, 640, 480, 0, 0).expect("create label");
+        let label =
+            create_label_from_pixels(&points, 640, 480, 0, 0).expect("create label");
         approx_eq(label.normalized_coords[0], 0.1);
         approx_eq(label.normalized_coords[1], 0.2);
         approx_eq(label.normalized_coords[5], 0.8);
@@ -531,7 +523,8 @@ mod tests {
     #[test]
     fn bounding_box_computed() {
         let points = [(50.0, 100.0), (200.0, 50.0), (150.0, 300.0)];
-        let label = create_label_from_pixels(&points, 640, 480, 0, 0).expect("create label");
+        let label =
+            create_label_from_pixels(&points, 640, 480, 0, 0).expect("create label");
         approx_eq(label.pixel_bbox.x, 50.0);
         approx_eq(label.pixel_bbox.y, 50.0);
         approx_eq(label.pixel_bbox.width, 150.0);
@@ -540,7 +533,8 @@ mod tests {
 
     #[test]
     fn too_few_points_raises() {
-        let result = create_label_from_pixels(&[(10.0, 10.0), (20.0, 20.0)], 640, 480, 0, 0);
+        let result =
+            create_label_from_pixels(&[(10.0, 10.0), (20.0, 20.0)], 640, 480, 0, 0);
         assert!(result.is_err());
     }
 
@@ -560,7 +554,8 @@ mod tests {
     fn roundtrip_through_write_and_read() {
         let temp = TempDir::new().expect("create temp dir");
         let points = [(64.0, 96.0), (192.0, 96.0), (192.0, 384.0)];
-        let label = create_label_from_pixels(&points, 640, 480, 3, 0).expect("create label");
+        let label =
+            create_label_from_pixels(&points, 640, 480, 3, 0).expect("create label");
         let out = temp.path().join("new.txt");
         write_yolo_labels(&out, &[label]).expect("write labels");
         let reparsed = parse_yolo_labels(&out, 640, 480);

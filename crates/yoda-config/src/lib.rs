@@ -74,8 +74,12 @@ impl YoDaSettings {
             let key = key.into();
             let value = value.into();
             match key.as_str() {
-                "YODA_IMAGE_BASE_PATH" => settings.image_base_path = PathBuf::from(value),
-                "YODA_LABEL_BASE_PATH" => settings.label_base_path = PathBuf::from(value),
+                "YODA_IMAGE_BASE_PATH" => {
+                    settings.image_base_path = PathBuf::from(value)
+                }
+                "YODA_LABEL_BASE_PATH" => {
+                    settings.label_base_path = PathBuf::from(value)
+                }
                 "YODA_CLASS_INFO" | "YODA_CLASS_INFO_YAML" => {
                     settings.class_info = Some(PathBuf::from(value));
                 }
@@ -124,22 +128,18 @@ impl YoDaConfig {
         Self::load_with_overrides(YoDaSettingsOverrides::default())
     }
 
-    pub fn load_with_overrides(overrides: YoDaSettingsOverrides) -> Result<Self, ConfigError> {
+    pub fn load_with_overrides(
+        overrides: YoDaSettingsOverrides,
+    ) -> Result<Self, ConfigError> {
         let settings = YoDaSettings::from_env()?.with_overrides(overrides);
-        let (color_map_tuples, color_map_strings) = load_color_map(settings.color_map.as_deref())?;
+        let (color_map_tuples, color_map_strings) =
+            load_color_map(settings.color_map.as_deref())?;
 
-        Ok(Self {
-            settings,
-            color_map_tuples,
-            color_map_strings,
-        })
+        Ok(Self { settings, color_map_tuples, color_map_strings })
     }
 
     pub fn get_color_tuple(&self, class_id: u32) -> (u8, u8, u8) {
-        self.color_map_tuples
-            .get(&class_id)
-            .copied()
-            .unwrap_or((255, 255, 255))
+        self.color_map_tuples.get(&class_id).copied().unwrap_or((255, 255, 255))
     }
 
     pub fn get_color_string(&self, class_id: u32) -> String {
@@ -219,7 +219,9 @@ fn parse_class_names(names: &Value) -> HashMap<u32, String> {
         Value::Sequence(sequence) => sequence
             .iter()
             .enumerate()
-            .filter_map(|(index, value)| value.as_str().map(|name| (index as u32, name.to_string())))
+            .filter_map(|(index, value)| {
+                value.as_str().map(|name| (index as u32, name.to_string()))
+            })
             .collect(),
         _ => HashMap::new(),
     }
@@ -264,11 +266,12 @@ mod tests {
 
     use tempfile::TempDir;
 
-    use super::{load_class_map, YoDaConfig, YoDaSettings, YoDaSettingsOverrides};
+    use super::{YoDaConfig, YoDaSettings, YoDaSettingsOverrides, load_class_map};
 
     #[test]
     fn defaults() {
-        let settings = YoDaSettings::from_env_iter(Vec::<(String, String)>::new()).expect("load settings");
+        let settings = YoDaSettings::from_env_iter(Vec::<(String, String)>::new())
+            .expect("load settings");
         assert_eq!(settings.image_base_path, PathBuf::from("example_data/images"));
         assert_eq!(settings.label_base_path, PathBuf::from("example_data/labels"));
         assert_eq!(settings.port, 8080);
@@ -277,7 +280,8 @@ mod tests {
 
     #[test]
     fn env_prefix() {
-        let settings = YoDaSettings::from_env_iter(vec![("YODA_PORT", "9999")]).expect("load settings");
+        let settings = YoDaSettings::from_env_iter(vec![("YODA_PORT", "9999")])
+            .expect("load settings");
         assert_eq!(settings.port, 9999);
     }
 
@@ -336,11 +340,8 @@ mod tests {
     fn load_valid_yaml() {
         let temp = TempDir::new().expect("create temp dir");
         let yaml = temp.path().join("classes.yaml");
-        fs::write(
-            &yaml,
-            "names:\n  0: back_bumper\n  1: front_bumper\n  2: wheel\n",
-        )
-        .expect("write classes");
+        fs::write(&yaml, "names:\n  0: back_bumper\n  1: front_bumper\n  2: wheel\n")
+            .expect("write classes");
         let class_map = load_class_map(Some(&yaml));
         assert_eq!(class_map[&0], "back_bumper");
         assert_eq!(class_map[&1], "front_bumper");

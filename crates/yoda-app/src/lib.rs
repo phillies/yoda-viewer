@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use yoda_core::{create_label_from_pixels, delete_label, LabelError, LabelObject, Point};
+use yoda_core::{
+    LabelError, LabelObject, Point, create_label_from_pixels, delete_label,
+};
 use yoda_data::{DatasetRepository, FilterMode, RepositoryError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -29,11 +31,7 @@ pub struct ViewTransform {
 
 impl Default for ViewTransform {
     fn default() -> Self {
-        Self {
-            zoom: 1.0,
-            pan_x: 0.0,
-            pan_y: 0.0,
-        }
+        Self { zoom: 1.0, pan_x: 0.0, pan_y: 0.0 }
     }
 }
 
@@ -122,7 +120,8 @@ impl AppState {
             .iter()
             .cloned()
             .map(|mut label| {
-                label.visible = label.visible && !self.hidden_classes.contains(&label.class_id);
+                label.visible =
+                    label.visible && !self.hidden_classes.contains(&label.class_id);
                 label
             })
             .collect()
@@ -143,10 +142,7 @@ pub struct LoadedImage {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppEffect {
-    PersistLabels {
-        image_path: PathBuf,
-        labels: Vec<LabelObject>,
-    },
+    PersistLabels { image_path: PathBuf, labels: Vec<LabelObject> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -198,24 +194,15 @@ pub struct ActionResult {
 
 impl ActionResult {
     const fn applied() -> Self {
-        Self {
-            effects: Vec::new(),
-            blocked: None,
-        }
+        Self { effects: Vec::new(), blocked: None }
     }
 
     fn with_effect(effect: AppEffect) -> Self {
-        Self {
-            effects: vec![effect],
-            blocked: None,
-        }
+        Self { effects: vec![effect], blocked: None }
     }
 
     const fn blocked(operation: EditOperation) -> Self {
-        Self {
-            effects: Vec::new(),
-            blocked: Some(operation),
-        }
+        Self { effects: Vec::new(), blocked: Some(operation) }
     }
 }
 
@@ -231,7 +218,11 @@ pub enum AppError {
 
 pub trait AppServices {
     fn load_image(&self, image_path: &Path) -> Result<LoadedImage, AppError>;
-    fn persist_labels(&self, image_path: &Path, labels: &[LabelObject]) -> Result<(), AppError>;
+    fn persist_labels(
+        &self,
+        image_path: &Path,
+        labels: &[LabelObject],
+    ) -> Result<(), AppError>;
     fn load_class_map(&self) -> Result<HashMap<u32, String>, AppError>;
 }
 
@@ -267,7 +258,11 @@ where
         })
     }
 
-    fn persist_labels(&self, image_path: &Path, labels: &[LabelObject]) -> Result<(), AppError> {
+    fn persist_labels(
+        &self,
+        image_path: &Path,
+        labels: &[LabelObject],
+    ) -> Result<(), AppError> {
         self.repository.save_labels(image_path, labels)?;
         Ok(())
     }
@@ -277,7 +272,10 @@ where
     }
 }
 
-pub fn apply_action(state: &mut AppState, action: AppAction) -> Result<ActionResult, AppError> {
+pub fn apply_action(
+    state: &mut AppState,
+    action: AppAction,
+) -> Result<ActionResult, AppError> {
     let result = match action {
         AppAction::ImageLoaded(loaded) => {
             state.current_image_path = Some(loaded.image_path);
@@ -360,24 +358,20 @@ pub fn apply_action(state: &mut AppState, action: AppAction) -> Result<ActionRes
             }
             ActionResult::applied()
         }
-        AppAction::SetObjectVisibility {
-            label_index,
-            visible,
-        } => {
-            if let Some(label) = state
-                .current_labels
-                .iter_mut()
-                .find(|label| label.index == label_index)
+        AppAction::SetObjectVisibility { label_index, visible } => {
+            if let Some(label) =
+                state.current_labels.iter_mut().find(|label| label.index == label_index)
             {
                 label.visible = visible;
             }
             ActionResult::applied()
         }
         AppAction::ToggleSelection { label_index } => {
-            state.selected_object_index = match (state.selected_object_index, label_index) {
-                (Some(current), Some(next)) if current == next => None,
-                (_, next) => next,
-            };
+            state.selected_object_index =
+                match (state.selected_object_index, label_index) {
+                    (Some(current), Some(next)) if current == next => None,
+                    (_, next) => next,
+                };
             ActionResult::applied()
         }
         AppAction::SelectLabel { label_index } => {
@@ -400,10 +394,9 @@ pub fn apply_action(state: &mut AppState, action: AppAction) -> Result<ActionRes
             ActionResult::applied()
         }
         AppAction::FinishDrawing => finish_drawing(state)?,
-        AppAction::ChangeLabelClass {
-            label_index,
-            class_id,
-        } => change_label_class(state, label_index, class_id),
+        AppAction::ChangeLabelClass { label_index, class_id } => {
+            change_label_class(state, label_index, class_id)
+        }
         AppAction::DeleteSelectedLabel => {
             if let Some(label_index) = state.selected_object_index {
                 delete_label_by_index(state, label_index)
@@ -411,7 +404,9 @@ pub fn apply_action(state: &mut AppState, action: AppAction) -> Result<ActionRes
                 ActionResult::applied()
             }
         }
-        AppAction::DeleteLabel { label_index } => delete_label_by_index(state, label_index),
+        AppAction::DeleteLabel { label_index } => {
+            delete_label_by_index(state, label_index)
+        }
         AppAction::SetZoom(zoom) => {
             state.view.zoom = zoom.max(0.01);
             ActionResult::applied()
@@ -493,16 +488,19 @@ fn finish_drawing(state: &mut AppState) -> Result<ActionResult, AppError> {
     Ok(save_effect_for_current_image(state))
 }
 
-fn change_label_class(state: &mut AppState, label_index: usize, class_id: u32) -> ActionResult {
+fn change_label_class(
+    state: &mut AppState,
+    label_index: usize,
+    class_id: u32,
+) -> ActionResult {
     if state.is_locked() {
-        state.status.error_text = Some(String::from("Unlock editing to change classes."));
+        state.status.error_text =
+            Some(String::from("Unlock editing to change classes."));
         return ActionResult::blocked(EditOperation::ChangeLabelClass);
     }
 
-    if let Some(label) = state
-        .current_labels
-        .iter_mut()
-        .find(|label| label.index == label_index)
+    if let Some(label) =
+        state.current_labels.iter_mut().find(|label| label.index == label_index)
     {
         label.class_id = class_id;
     }
@@ -512,7 +510,8 @@ fn change_label_class(state: &mut AppState, label_index: usize, class_id: u32) -
 
 fn delete_label_by_index(state: &mut AppState, label_index: usize) -> ActionResult {
     if state.is_locked() {
-        state.status.error_text = Some(String::from("Unlock editing to delete objects."));
+        state.status.error_text =
+            Some(String::from("Unlock editing to delete objects."));
         return ActionResult::blocked(EditOperation::DeleteLabel);
     }
 
@@ -564,9 +563,9 @@ mod tests {
     use yoda_data::LocalDatasetRepository;
 
     use super::{
-        apply_action, AccessMode, AppAction, AppEffect, AppServices, AppState,
-        EditOperation, ImageDimensions, InteractionMode, LoadedImage, Point,
-        RepositoryBackedAppServices,
+        AccessMode, AppAction, AppEffect, AppServices, AppState, EditOperation,
+        ImageDimensions, InteractionMode, LoadedImage, Point,
+        RepositoryBackedAppServices, apply_action,
     };
 
     fn sample_dataset() -> TempDir {
@@ -584,7 +583,8 @@ mod tests {
             "0 0.1 0.2 0.3 0.2 0.3 0.8 0.1 0.8 0.05 0.5\n2 0.5 0.5 0.7 0.5 0.7 0.9 0.5 0.9\n",
         )
         .expect("write labels");
-        fs::write(label_dir.join("test2.txt"), "1 0.5 0.5 0.4 0.6\n").expect("write labels");
+        fs::write(label_dir.join("test2.txt"), "1 0.5 0.5 0.4 0.6\n")
+            .expect("write labels");
 
         temp
     }
@@ -628,18 +628,21 @@ mod tests {
             host: None,
             port: 8080,
         };
-        let services = RepositoryBackedAppServices::new(LocalDatasetRepository::new(settings));
+        let services =
+            RepositoryBackedAppServices::new(LocalDatasetRepository::new(settings));
         let mut state = AppState::default();
         state.access_mode = AccessMode::Unlocked;
 
         let first = services
             .load_image(&temp.path().join("images/train/test1.jpg"))
             .expect("load first image");
-        apply_action(&mut state, AppAction::ImageLoaded(first)).expect("apply first load");
+        apply_action(&mut state, AppAction::ImageLoaded(first))
+            .expect("apply first load");
         let second = services
             .load_image(&temp.path().join("images/train/test2.png"))
             .expect("load second image");
-        apply_action(&mut state, AppAction::ImageLoaded(second)).expect("apply second load");
+        apply_action(&mut state, AppAction::ImageLoaded(second))
+            .expect("apply second load");
 
         assert_eq!(state.access_mode, AccessMode::Unlocked);
         assert_eq!(state.selected_object_index, None);
@@ -652,26 +655,32 @@ mod tests {
         apply_action(&mut state, AppAction::ImageLoaded(loaded)).expect("load state");
         state.selected_object_index = Some(0);
         state.interaction_mode = InteractionMode::Draw;
-        state.drawing_vertices = vec![Point::new(10.0, 10.0), Point::new(20.0, 10.0), Point::new(20.0, 20.0)];
+        state.drawing_vertices = vec![
+            Point::new(10.0, 10.0),
+            Point::new(20.0, 10.0),
+            Point::new(20.0, 20.0),
+        ];
 
-        let draw_mode = apply_action(&mut state, AppAction::SetInteractionMode(InteractionMode::Draw))
-            .expect("apply draw mode");
+        let draw_mode = apply_action(
+            &mut state,
+            AppAction::SetInteractionMode(InteractionMode::Draw),
+        )
+        .expect("apply draw mode");
         assert_eq!(draw_mode.blocked, Some(EditOperation::EnterDrawMode));
 
-        let delete = apply_action(&mut state, AppAction::DeleteSelectedLabel).expect("delete");
+        let delete =
+            apply_action(&mut state, AppAction::DeleteSelectedLabel).expect("delete");
         assert_eq!(delete.blocked, Some(EditOperation::DeleteLabel));
 
         let change = apply_action(
             &mut state,
-            AppAction::ChangeLabelClass {
-                label_index: 0,
-                class_id: 9,
-            },
+            AppAction::ChangeLabelClass { label_index: 0, class_id: 9 },
         )
         .expect("change class");
         assert_eq!(change.blocked, Some(EditOperation::ChangeLabelClass));
 
-        let finish = apply_action(&mut state, AppAction::FinishDrawing).expect("finish drawing");
+        let finish =
+            apply_action(&mut state, AppAction::FinishDrawing).expect("finish drawing");
         assert_eq!(finish.blocked, Some(EditOperation::FinishDrawing));
     }
 
@@ -682,18 +691,12 @@ mod tests {
 
         apply_action(
             &mut state,
-            AppAction::SetObjectVisibility {
-                label_index: 0,
-                visible: false,
-            },
+            AppAction::SetObjectVisibility { label_index: 0, visible: false },
         )
         .expect("set object visibility");
         apply_action(
             &mut state,
-            AppAction::SetClassVisibility {
-                class_id: 2,
-                visible: false,
-            },
+            AppAction::SetClassVisibility { class_id: 2, visible: false },
         )
         .expect("set class visibility");
 
@@ -709,8 +712,9 @@ mod tests {
         apply_action(&mut state, AppAction::ImageLoaded(loaded)).expect("load state");
         state.selected_object_index = Some(1);
 
-        let result = apply_action(&mut state, AppAction::DeleteLabel { label_index: 1 })
-            .expect("delete label");
+        let result =
+            apply_action(&mut state, AppAction::DeleteLabel { label_index: 1 })
+                .expect("delete label");
         assert_eq!(state.selected_object_index, None);
         assert_eq!(state.current_labels.len(), 1);
         assert!(matches!(result.effects[0], AppEffect::PersistLabels { .. }));
@@ -731,7 +735,8 @@ mod tests {
         apply_action(&mut state, AppAction::AddDrawingVertex(Point::new(20.0, 20.0)))
             .expect("add vertex 3");
 
-        let result = apply_action(&mut state, AppAction::FinishDrawing).expect("finish drawing");
+        let result =
+            apply_action(&mut state, AppAction::FinishDrawing).expect("finish drawing");
         assert_eq!(state.current_labels.len(), 3);
         assert_eq!(state.current_labels[2].class_id, 7);
         assert!(state.drawing_vertices.is_empty());
@@ -750,12 +755,16 @@ mod tests {
             host: None,
             port: 8080,
         };
-        let services = RepositoryBackedAppServices::new(LocalDatasetRepository::new(settings));
+        let services =
+            RepositoryBackedAppServices::new(LocalDatasetRepository::new(settings));
 
         let loaded = services
             .load_image(Path::new(&temp.path().join("images/train/test2.png")))
             .expect("load image");
-        assert_eq!(loaded.image_dimensions, ImageDimensions { width: 640, height: 480 });
+        assert_eq!(
+            loaded.image_dimensions,
+            ImageDimensions { width: 640, height: 480 }
+        );
         assert_eq!(loaded.labels.len(), 1);
         assert!(loaded.label_path.ends_with("test2.txt"));
     }
@@ -771,7 +780,8 @@ mod tests {
             host: None,
             port: 8080,
         };
-        let services = RepositoryBackedAppServices::new(LocalDatasetRepository::new(settings));
+        let services =
+            RepositoryBackedAppServices::new(LocalDatasetRepository::new(settings));
         let mut loaded = services
             .load_image(Path::new(&temp.path().join("images/train/test2.png")))
             .expect("load image");

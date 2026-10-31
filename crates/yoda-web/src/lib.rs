@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use axum::extract::{Extension, Query};
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use dioxus_server::{DioxusRouterExt, FullstackState, ServeConfig};
 use serde::{Deserialize, Serialize};
@@ -17,8 +17,9 @@ use yoda_app::RepositoryBackedAppServices;
 use yoda_config::YoDaSettings;
 use yoda_core::{LabelObject, RenderOptions, render_labels_to_svg};
 use yoda_data::{
-    ClassIndex, DatasetRepository, FlatIndex, FlatNode, LocalDatasetRepository, TreeNode,
-    extract_class_ids, scan_dataset_tree,
+    ClassIndex, DatasetRepository, DatasetStats, FlatIndex, FlatNode,
+    LocalDatasetRepository, RefreshStats, TreeNode, extract_class_ids,
+    scan_dataset_tree,
 };
 use yoda_ui::{PAN_ZOOM_SCRIPT, RootApp};
 
@@ -85,7 +86,7 @@ a { color: inherit; text-decoration: none; }
 pub struct BackendState {
     repository: LocalDatasetRepository,
     image_root: PathBuf,
-    flat_index: Arc<FlatIndex>,
+    flat_index: Arc<RwLock<Arc<FlatIndex>>>,
     class_index: Arc<RwLock<ClassIndex>>,
 }
 
@@ -105,15 +106,38 @@ impl BackendState {
         );
 
         let label_root = settings.label_base_path.clone();
-        let class_index = ClassIndex::load_or_build(&image_root, &label_root, &flat_index);
+        let class_index =
+            ClassIndex::load_or_build(&image_root, &label_root, &flat_index);
         tracing::info!(entry_count = class_index.entries.len(), "class index ready");
 
         Ok(Self {
             repository: LocalDatasetRepository::new(settings),
             image_root,
-            flat_index,
+            flat_index: Arc::new(RwLock::new(flat_index)),
             class_index: Arc::new(RwLock::new(class_index)),
         })
+    }
+
+    fn current_flat_index(&self) -> Arc<FlatIndex> {
+        match self.flat_index.read() {
+            Ok(guard) => Arc::clone(&guard),
+            Err(poisoned) => Arc::clone(&poisoned.into_inner()),
+        }
+    }
+
+    /// Rescan the image tree and re-sync the class index with the label files.
+    fn refresh_index(&self) -> Result<RefreshStats, ApiError> {
+        let flat = Arc::new(scan_dataset_tree(&self.image_root));
+        let mut index = self
+            .class_index
+            .write()
+            .map_err(|_| ApiError::internal("class index lock poisoned"))?;
+        let stats =
+            index.refresh(&self.image_root, self.repository.label_root(), &flat);
+        if let Ok(mut guard) = self.flat_index.write() {
+            *guard = flat;
+        }
+        Ok(stats)
     }
 
     fn services(&self) -> RepositoryBackedAppServices<LocalDatasetRepository> {
@@ -308,11 +332,14 @@ where
         .route("/tree/status", get(tree_status))
         .route("/tree/flat", get(tree_flat))
         .route("/image", get(image_bytes))
+        .route("/image/thumbnail", get(image_thumbnail))
+        .route("/stats", get(stats_handler))
         .route("/image/metadata", get(image_metadata))
         .route("/labels", get(load_labels).put(save_labels))
         .route("/class-map", get(class_map))
         .route("/color-map", get(color_map))
         .route("/class-index", get(class_index_handler))
+        .route("/index/refresh", post(refresh_index_handler))
         .layer(Extension(state))
 }
 
@@ -396,18 +423,20 @@ async fn list_children(
 async fn tree_status(
     Extension(state): Extension<Arc<BackendState>>,
 ) -> Json<TreeStatusResponse> {
+    let flat = state.current_flat_index();
     Json(TreeStatusResponse {
-        node_count: state.flat_index.nodes.len(),
-        image_count: state.flat_index.image_count,
+        node_count: flat.nodes.len(),
+        image_count: flat.image_count,
     })
 }
 
 async fn tree_flat(
     Extension(state): Extension<Arc<BackendState>>,
 ) -> Json<FlatIndexResponse> {
+    let flat = state.current_flat_index();
     Json(FlatIndexResponse {
-        nodes: Arc::clone(&state.flat_index.nodes),
-        image_count: state.flat_index.image_count,
+        nodes: Arc::clone(&flat.nodes),
+        image_count: flat.image_count,
     })
 }
 
@@ -426,8 +455,86 @@ async fn image_metadata(
     }))
 }
 
+fn file_etag(path: &Path) -> Option<String> {
+    let meta = fs::metadata(path).ok()?;
+    let nanos =
+        meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos();
+    Some(format!("\"{:x}-{:x}\"", meta.len(), nanos))
+}
+
+fn not_modified(headers: &HeaderMap, etag: &str) -> bool {
+    headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.split(',').any(|t| t.trim() == etag))
+}
+
+fn cached_response(
+    headers: &HeaderMap,
+    etag: Option<String>,
+    content_type: &'static str,
+    body: impl FnOnce() -> Result<Vec<u8>, ApiError>,
+) -> Result<Response, ApiError> {
+    let etag_value = etag.as_deref().and_then(|e| HeaderValue::from_str(e).ok());
+    if let Some(etag) = &etag {
+        if not_modified(headers, etag) {
+            let mut response = StatusCode::NOT_MODIFIED.into_response();
+            if let Some(value) = etag_value {
+                response.headers_mut().insert(header::ETAG, value);
+            }
+            return Ok(response);
+        }
+    }
+    let mut response =
+        ([(header::CONTENT_TYPE, HeaderValue::from_static(content_type))], body()?)
+            .into_response();
+    if let Some(value) = etag_value {
+        response.headers_mut().insert(header::ETAG, value);
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("private, no-cache"),
+        );
+    }
+    Ok(response)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ThumbnailQuery {
+    image_path: String,
+    size: Option<u32>,
+}
+
+async fn image_thumbnail(
+    Extension(state): Extension<Arc<BackendState>>,
+    headers: HeaderMap,
+    Query(query): Query<ThumbnailQuery>,
+) -> Result<Response, ApiError> {
+    let image_path = resolve_path(&state.image_root, &query.image_path)?;
+    if !is_image_path(&image_path) {
+        return Err(ApiError::bad_request("unsupported image extension"));
+    }
+    ensure_file(&image_path)?;
+    let size = query.size.unwrap_or(160).clamp(32, 512);
+    let etag = file_etag(&image_path)
+        .map(|e| format!("{}-t{size}\"", e.trim_end_matches('"')));
+    cached_response(&headers, etag, "image/jpeg", || {
+        state.repository.thumbnail_bytes(&image_path, size).map_err(ApiError::from)
+    })
+}
+
+async fn stats_handler(
+    Extension(state): Extension<Arc<BackendState>>,
+) -> Result<Json<DatasetStats>, ApiError> {
+    let index = state
+        .class_index
+        .read()
+        .map_err(|_| ApiError::internal("class index lock poisoned"))?;
+    Ok(Json(index.stats()))
+}
+
 async fn image_bytes(
     Extension(state): Extension<Arc<BackendState>>,
+    headers: HeaderMap,
     Query(query): Query<ImagePathQuery>,
 ) -> Result<Response, ApiError> {
     let image_path = resolve_path(&state.image_root, &query.image_path)?;
@@ -438,12 +545,10 @@ async fn image_bytes(
         )));
     }
     ensure_file(&image_path)?;
-    tracing::info!(image_path = %image_path.display(), "serving image bytes");
-    let bytes = state.repository.image_bytes(&image_path)?;
     let content_type = mime_type_for_image(&image_path);
-
-    Ok(([(header::CONTENT_TYPE, HeaderValue::from_static(content_type))], bytes)
-        .into_response())
+    cached_response(&headers, file_etag(&image_path), content_type, || {
+        Ok(state.repository.image_bytes(&image_path)?)
+    })
 }
 
 async fn load_labels(
@@ -480,9 +585,11 @@ async fn save_labels(
     let image_rel = dataset_relative_path(&state.image_root, &image_path);
     let new_class_ids = extract_class_ids(&payload.labels);
     if let Ok(mut index) = state.class_index.write() {
-        index.entries.insert(image_rel, new_class_ids);
-        let cache_path = state.repository.label_root().join(".yoda_class_index.json");
-        let _ = index.save_to_disk(&cache_path);
+        let label_path = state
+            .repository
+            .label_path_for_image(&image_path)
+            .unwrap_or_else(|_| PathBuf::from(&query.image_path));
+        index.update_entry(&image_rel, &label_path, new_class_ids);
     }
 
     let loaded = services.load_image(&image_path)?;
@@ -512,6 +619,16 @@ async fn color_map(
     Ok(Json(ColorMapResponse { color_map }))
 }
 
+async fn refresh_index_handler(
+    Extension(state): Extension<Arc<BackendState>>,
+) -> Result<Json<RefreshStats>, ApiError> {
+    let stats = tokio::task::spawn_blocking(move || state.refresh_index())
+        .await
+        .map_err(|error| ApiError::internal(error.to_string()))??;
+    tracing::info!(?stats, "index refreshed");
+    Ok(Json(stats))
+}
+
 async fn class_index_handler(
     Extension(state): Extension<Arc<BackendState>>,
 ) -> Result<Json<ClassIndexResponse>, ApiError> {
@@ -520,10 +637,7 @@ async fn class_index_handler(
         .read()
         .map_err(|_| ApiError::internal("class index lock poisoned"))?;
     let all_class_ids = index.all_class_ids().into_iter().collect();
-    Ok(Json(ClassIndexResponse {
-        entries: index.entries.clone(),
-        all_class_ids,
-    }))
+    Ok(Json(ClassIndexResponse { entries: index.entries.clone(), all_class_ids }))
 }
 
 async fn render_fallback_viewer(
@@ -1096,6 +1210,73 @@ mod tests {
         assert_eq!(payload.width, 640);
         assert_eq!(payload.height, 480);
         assert_eq!(payload.labels.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn image_endpoint_supports_etag_revalidation() {
+        let temp = sample_dataset();
+        let app = build_api_router(settings_for(&temp)).expect("build router");
+        let uri = "/api/image?image_path=train/test2.png";
+        let first = app
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).expect("request"))
+            .await
+            .expect("response");
+        let etag = first.headers().get("etag").expect("etag").clone();
+        let second = app
+            .oneshot(
+                Request::builder()
+                    .uri(uri)
+                    .header("if-none-match", etag)
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+    }
+
+    #[tokio::test]
+    async fn thumbnail_endpoint_returns_small_jpeg_and_caches_it() {
+        let temp = sample_dataset();
+        let app = build_api_router(settings_for(&temp)).expect("build router");
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/image/thumbnail?image_path=train/test1.jpg&size=64")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body =
+            to_bytes(response.into_body(), usize::MAX).await.expect("body bytes");
+        let decoded = image::load_from_memory(&body).expect("decode thumbnail");
+        assert_eq!(decoded.width(), 64);
+        assert!(temp.path().join("labels/.yoda_thumbs").is_dir());
+    }
+
+    #[tokio::test]
+    async fn stats_endpoint_counts_images_per_class() {
+        let temp = sample_dataset();
+        let app = build_api_router(settings_for(&temp)).expect("build router");
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/stats")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body =
+            to_bytes(response.into_body(), usize::MAX).await.expect("body bytes");
+        let stats: yoda_data::DatasetStats =
+            serde_json::from_slice(&body).expect("parse stats");
+        assert_eq!(stats.images, 2);
+        assert_eq!(stats.images_per_class, vec![(0, 1), (1, 1)]);
     }
 
     #[tokio::test]

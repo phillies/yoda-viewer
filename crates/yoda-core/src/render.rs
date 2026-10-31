@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use crate::{LabelObject, LabelType, PixelBBox, Point};
 
-const LABEL_FONT_FAMILY: &str = "'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace";
+const LABEL_FONT_FAMILY: &str =
+    "'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderOptions {
@@ -40,8 +41,7 @@ pub fn point_in_polygon(point: Point, polygon: &[Point]) -> bool {
         let previous_point = polygon[previous];
         let intersects = ((current_point.y > point.y) != (previous_point.y > point.y))
             && (point.x
-                < (previous_point.x - current_point.x)
-                    * (point.y - current_point.y)
+                < (previous_point.x - current_point.x) * (point.y - current_point.y)
                     / (previous_point.y - current_point.y)
                     + current_point.x);
 
@@ -69,8 +69,12 @@ pub fn hit_test_labels(labels: &[LabelObject], point: Point) -> Option<usize> {
         }
 
         match label.label_type {
-            LabelType::Polygon if point_in_polygon(point, &label.pixel_points) => Some(label.index),
-            LabelType::Bbox if bbox_contains(label.pixel_bbox, point) => Some(label.index),
+            LabelType::Polygon if point_in_polygon(point, &label.pixel_points) => {
+                Some(label.index)
+            }
+            LabelType::Bbox if bbox_contains(label.pixel_bbox, point) => {
+                Some(label.index)
+            }
             _ => None,
         }
     })
@@ -166,7 +170,8 @@ fn render_text_label(
 
     let text = text_parts.join(" ");
     let char_width = 6.0 * scale;
-    let text_width = ((text.chars().count() as f32) * char_width).max(20.0 * scale) + 8.0 * scale;
+    let text_width =
+        ((text.chars().count() as f32) * char_width).max(20.0 * scale) + 8.0 * scale;
     let text_height = 16.0 * scale;
     let font_size = (10.0 * scale).round() as u32;
     let x = label.pixel_bbox.x;
@@ -213,8 +218,8 @@ mod tests {
     use crate::{LabelObject, LabelType, PixelBBox, Point};
 
     use super::{
-        bbox_contains, hit_test_labels, point_in_polygon, render_labels_to_svg,
-        RenderOptions, LABEL_FONT_FAMILY,
+        LABEL_FONT_FAMILY, RenderOptions, bbox_contains, hit_test_labels,
+        point_in_polygon, render_labels_to_svg,
     };
 
     fn sample_labels() -> Vec<LabelObject> {
@@ -283,10 +288,7 @@ mod tests {
             &sample_labels(),
             Some(&color_map()),
             None,
-            &RenderOptions {
-                show_bbox: true,
-                ..RenderOptions::default()
-            },
+            &RenderOptions { show_bbox: true, ..RenderOptions::default() },
         );
         assert!(svg.contains("<polygon"));
         assert!(svg.contains("<rect"));
@@ -329,10 +331,8 @@ mod tests {
 
     #[test]
     fn class_name_text() {
-        let class_map = HashMap::from([
-            (0, String::from("bumper")),
-            (1, String::from("wheel")),
-        ]);
+        let class_map =
+            HashMap::from([(0, String::from("bumper")), (1, String::from("wheel"))]);
         let svg = render_labels_to_svg(
             &sample_labels(),
             Some(&color_map()),
@@ -354,10 +354,7 @@ mod tests {
             &sample_labels(),
             Some(&custom_colors),
             None,
-            &RenderOptions {
-                show_bbox: true,
-                ..RenderOptions::default()
-            },
+            &RenderOptions { show_bbox: true, ..RenderOptions::default() },
         );
         assert!(svg.contains("rgb(10,20,30)"));
         assert!(svg.contains("rgb(40,50,60)"));
@@ -371,10 +368,7 @@ mod tests {
             &labels,
             Some(&color_map()),
             None,
-            &RenderOptions {
-                show_bbox: true,
-                ..RenderOptions::default()
-            },
+            &RenderOptions { show_bbox: true, ..RenderOptions::default() },
         );
         assert!(!svg.contains("rgb(255,0,0)"));
         assert!(svg.contains("rgb(0,255,0)"));
@@ -388,10 +382,8 @@ mod tests {
 
     #[test]
     fn class_id_and_name_combined() {
-        let class_map = HashMap::from([
-            (0, String::from("bumper")),
-            (1, String::from("wheel")),
-        ]);
+        let class_map =
+            HashMap::from([(0, String::from("bumper")), (1, String::from("wheel"))]);
         let svg = render_labels_to_svg(
             &sample_labels(),
             Some(&color_map()),
@@ -416,10 +408,7 @@ mod tests {
             &sample_labels(),
             Some(&color_map()),
             None,
-            &RenderOptions {
-                selected_index: Some(0),
-                ..RenderOptions::default()
-            },
+            &RenderOptions { selected_index: Some(0), ..RenderOptions::default() },
         );
         assert!(svg.contains("stroke=\"white\""));
         assert!(svg.contains("stroke-dasharray"));
@@ -498,10 +487,8 @@ mod tests {
 
     #[test]
     fn overlay_snapshot() {
-        let class_map = HashMap::from([
-            (0, String::from("bumper")),
-            (1, String::from("wheel")),
-        ]);
+        let class_map =
+            HashMap::from([(0, String::from("bumper")), (1, String::from("wheel"))]);
         let svg = render_labels_to_svg(
             &sample_labels(),
             Some(&color_map()),
